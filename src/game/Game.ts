@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { FPSControls } from '../controls/FPSControls';
+import { InputManager } from '../controls/InputManager';
+import { Player } from '../player/Player';
 import { Crosshair } from '../ui/Crosshair';
 import { StartOverlay } from '../ui/StartOverlay';
+import { GameClock } from '../utils/GameClock';
 
 export class Game {
   private container: HTMLElement;
@@ -11,6 +14,9 @@ export class Game {
   private isRunning: boolean = false;
   
   private fpsControls: FPSControls;
+  private inputManager: InputManager;
+  private player: Player;
+  private clock: GameClock;
   
   private crosshair: Crosshair;
   private startOverlay: StartOverlay;
@@ -26,7 +32,10 @@ export class Game {
     );
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     
+    this.clock = new GameClock();
     this.fpsControls = new FPSControls(this.camera, this.renderer.domElement);
+    this.inputManager = new InputManager();
+    this.player = new Player(this.camera, this.fpsControls, this.inputManager);
     
     this.crosshair = new Crosshair();
     this.startOverlay = new StartOverlay();
@@ -41,10 +50,7 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.container.appendChild(this.renderer.domElement);
 
-    this.camera.position.set(0, 1.7, 5);
-
     this.scene.background = new THREE.Color(0x87ceeb);
-
     this.scene.fog = new THREE.Fog(0x87ceeb, 10, 100);
 
     this.setupLighting();
@@ -54,13 +60,15 @@ export class Game {
     this.fpsControls.onLock = () => {
       this.startOverlay.hide();
       this.crosshair.show();
-      console.log('Controls locked - game active');
+      this.clock.start();
+      console.log('Game active');
     };
 
     this.fpsControls.onUnlock = () => {
       this.startOverlay.show();
       this.crosshair.hide();
-      console.log('Controls unlocked - game paused');
+      this.clock.stop();
+      console.log('Game paused');
     };
 
     this.startOverlay.show();
@@ -102,6 +110,12 @@ export class Game {
     floor.receiveShadow = true;
     this.scene.add(floor);
 
+    const gridHelper = new THREE.GridHelper(50, 50, 0x000000, 0x000000);
+    gridHelper.position.y = 0.01;
+    gridHelper.material.opacity = 0.2;
+    gridHelper.material.transparent = true;
+    this.scene.add(gridHelper);
+
     const boxGeometry = new THREE.BoxGeometry(2, 2, 2);
     const boxMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 });
 
@@ -111,6 +125,8 @@ export class Game {
       { x: 0, z: -10 },
       { x: -8, z: -15 },
       { x: 8, z: -15 },
+      { x: -3, z: -20 },
+      { x: 3, z: -20 },
     ];
 
     positions.forEach((pos) => {
@@ -120,6 +136,17 @@ export class Game {
       box.receiveShadow = true;
       this.scene.add(box);
     });
+
+    const tallBoxGeometry = new THREE.BoxGeometry(2, 4, 2);
+    const tallBox1 = new THREE.Mesh(tallBoxGeometry, boxMaterial);
+    tallBox1.position.set(-10, 2, -10);
+    tallBox1.castShadow = true;
+    this.scene.add(tallBox1);
+
+    const tallBox2 = new THREE.Mesh(tallBoxGeometry, boxMaterial);
+    tallBox2.position.set(10, 2, -10);
+    tallBox2.castShadow = true;
+    this.scene.add(tallBox2);
 
     const pillarGeometry = new THREE.CylinderGeometry(0.5, 0.5, 5, 16);
     const pillarMaterial = new THREE.MeshStandardMaterial({ color: 0xb0b0b0 });
@@ -139,7 +166,7 @@ export class Game {
   public start(): void {
     this.isRunning = true;
     this.animate();
-    console.log('Game started! Click to play.');
+    console.log('Game initialized! Click to play.');
   }
 
   private animate(): void {
@@ -147,12 +174,15 @@ export class Game {
     
     requestAnimationFrame(this.animate.bind(this));
     
-    this.update();
+    const deltaTime = this.clock.update();
+    
+    this.update(deltaTime);
     
     this.renderer.render(this.scene, this.camera);
   }
 
-  private update(): void {
+  private update(deltaTime: number): void {
+    this.player.update(deltaTime);
   }
 
   public getScene(): THREE.Scene {
@@ -163,7 +193,7 @@ export class Game {
     return this.camera;
   }
 
-  public getControls(): FPSControls {
-    return this.fpsControls;
+  public getPlayer(): Player {
+    return this.player;
   }
 }
