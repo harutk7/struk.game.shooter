@@ -57,6 +57,10 @@ export class Game {
 
     this.setupTestEnvironment();
 
+    this.startOverlay.setOnClick(() => {
+      this.fpsControls.lock();
+    });
+
     this.fpsControls.onLock = () => {
       this.startOverlay.hide();
       this.crosshair.show();

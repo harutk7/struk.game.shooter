@@ -1,5 +1,6 @@
 export class StartOverlay {
   private element: HTMLDivElement;
+  private onClick: (() => void) | null = null;
   
   constructor() {
     this.element = document.createElement('div');
@@ -66,6 +67,13 @@ export class StartOverlay {
       document.body.appendChild(this.element);
     }
     this.element.style.display = 'flex';
+  }
+
+  public setOnClick(callback: () => void): void {
+    this.onClick = callback;
+    this.element.addEventListener('click', () => {
+      if (this.onClick) this.onClick();
+    });
   }
 
   public hide(): void {
