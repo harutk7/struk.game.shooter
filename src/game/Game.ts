@@ -8,6 +8,8 @@ import { GameClock } from '../utils/GameClock';
 import { Weapon } from '../weapons/Weapon';
 import { HUD } from '../ui/HUD';
 import { EnemyManager } from '../enemies/EnemyManager';
+import { World } from '../world/World';
+import { Skybox } from '../world/Skybox';
 
 export class Game {
   private container: HTMLElement;
@@ -27,6 +29,8 @@ export class Game {
   private hud: HUD;
   private enemyManager: EnemyManager;
   private score: number = 0;
+  private world: World;
+  private skybox: Skybox;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -89,6 +93,13 @@ export class Game {
       }
     };
     
+    this.world = new World(this.scene, {
+      width: 50,
+      depth: 50,
+      wallHeight: 5,
+    });
+    this.skybox = new Skybox(this.scene);
+    
     this.init();
   }
 
@@ -99,12 +110,9 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.container.appendChild(this.renderer.domElement);
 
-    this.scene.background = new THREE.Color(0x87ceeb);
     this.scene.fog = new THREE.Fog(0x87ceeb, 10, 100);
 
     this.setupLighting();
-
-    this.setupTestEnvironment();
 
     this.startOverlay.setOnClick(() => {
       this.fpsControls.lock();
@@ -137,83 +145,30 @@ export class Game {
   }
 
   private setupLighting(): void {
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+    const ambientLight = new THREE.AmbientLight(0x6688cc, 0.4);
     this.scene.add(ambientLight);
 
-    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x444444, 0.6);
+    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x444444, 0.5);
     hemiLight.position.set(0, 50, 0);
     this.scene.add(hemiLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(20, 40, 20);
-    directionalLight.castShadow = true;
-    directionalLight.shadow.mapSize.width = 2048;
-    directionalLight.shadow.mapSize.height = 2048;
-    directionalLight.shadow.camera.near = 0.5;
-    directionalLight.shadow.camera.far = 100;
-    directionalLight.shadow.camera.left = -30;
-    directionalLight.shadow.camera.right = 30;
-    directionalLight.shadow.camera.top = 30;
-    directionalLight.shadow.camera.bottom = -30;
-    this.scene.add(directionalLight);
-  }
+    const sunLight = new THREE.DirectionalLight(0xffffcc, 1.2);
+    sunLight.position.set(30, 50, 30);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 4096;
+    sunLight.shadow.mapSize.height = 4096;
+    sunLight.shadow.camera.near = 0.5;
+    sunLight.shadow.camera.far = 150;
+    sunLight.shadow.camera.left = -50;
+    sunLight.shadow.camera.right = 50;
+    sunLight.shadow.camera.top = 50;
+    sunLight.shadow.camera.bottom = -50;
+    sunLight.shadow.bias = -0.0001;
+    this.scene.add(sunLight);
 
-  private setupTestEnvironment(): void {
-    const floorGeometry = new THREE.PlaneGeometry(50, 50);
-    const floorMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0x3a7d3a,
-      roughness: 0.8,
-    });
-    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    this.scene.add(floor);
-
-    const gridHelper = new THREE.GridHelper(50, 50, 0x000000, 0x000000);
-    gridHelper.position.y = 0.01;
-    gridHelper.material.opacity = 0.2;
-    gridHelper.material.transparent = true;
-    this.scene.add(gridHelper);
-
-    const boxGeometry = new THREE.BoxGeometry(2, 2, 2);
-    const boxMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 });
-
-    const positions = [
-      { x: -5, z: -5 },
-      { x: 5, z: -5 },
-      { x: 0, z: -10 },
-      { x: -8, z: -15 },
-      { x: 8, z: -15 },
-      { x: -3, z: -20 },
-      { x: 3, z: -20 },
-    ];
-
-    positions.forEach((pos) => {
-      const box = new THREE.Mesh(boxGeometry, boxMaterial);
-      box.position.set(pos.x, 1, pos.z);
-      box.castShadow = true;
-      box.receiveShadow = true;
-      this.scene.add(box);
-    });
-
-    const tallBoxGeometry = new THREE.BoxGeometry(2, 4, 2);
-    const tallBox1 = new THREE.Mesh(tallBoxGeometry, boxMaterial);
-    tallBox1.position.set(-10, 2, -10);
-    tallBox1.castShadow = true;
-    this.scene.add(tallBox1);
-
-    const tallBox2 = new THREE.Mesh(tallBoxGeometry, boxMaterial);
-    tallBox2.position.set(10, 2, -10);
-    tallBox2.castShadow = true;
-    this.scene.add(tallBox2);
-
-    const pillarGeometry = new THREE.CylinderGeometry(0.5, 0.5, 5, 16);
-    const pillarMaterial = new THREE.MeshStandardMaterial({ color: 0xb0b0b0 });
-    const pillar = new THREE.Mesh(pillarGeometry, pillarMaterial);
-    pillar.position.set(3, 2.5, -8);
-    pillar.castShadow = true;
-    pillar.receiveShadow = true;
-    this.scene.add(pillar);
+    const fillLight = new THREE.DirectionalLight(0x8888ff, 0.3);
+    fillLight.position.set(-20, 30, -20);
+    this.scene.add(fillLight);
   }
 
   private onWindowResize(): void {
@@ -242,6 +197,10 @@ export class Game {
 
   private update(deltaTime: number): void {
     this.player.update(deltaTime);
+    
+    const playerPos = this.player.getPosition();
+    this.world.clampToArena(playerPos);
+    
     this.enemyManager.update(deltaTime, this.player.getPosition());
   }
 
