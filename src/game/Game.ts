@@ -7,6 +7,7 @@ import { StartOverlay } from '../ui/StartOverlay';
 import { GameClock } from '../utils/GameClock';
 import { Weapon } from '../weapons/Weapon';
 import { HUD } from '../ui/HUD';
+import { EnemyManager } from '../enemies/EnemyManager';
 
 export class Game {
   private container: HTMLElement;
@@ -24,6 +25,8 @@ export class Game {
   private startOverlay: StartOverlay;
   private weapon: Weapon;
   private hud: HUD;
+  private enemyManager: EnemyManager;
+  private score: number = 0;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -42,11 +45,28 @@ export class Game {
     this.player = new Player(this.camera, this.fpsControls, this.inputManager);
     this.weapon = new Weapon(this.camera, this.scene, 'PISTOL');
     this.hud = new HUD();
+    this.enemyManager = new EnemyManager(this.scene);
     
     this.crosshair = new Crosshair();
     this.startOverlay = new StartOverlay();
     
     this.player.setWeapon(this.weapon);
+    
+    this.enemyManager.onEnemyKilled = (points) => {
+      this.score += points;
+      this.hud.updateScore(this.score);
+      console.log(`Enemy killed! +${points} points. Total: ${this.score}`);
+    };
+
+    this.enemyManager.onPlayerDamaged = (damage) => {
+      this.player.takeDamage(damage);
+      this.hud.updateHealth(this.player.getHealth(), this.player.getMaxHealth());
+      this.flashDamage();
+    };
+
+    this.enemyManager.onWaveComplete = (waveNumber) => {
+      console.log(`Wave ${waveNumber} complete!`);
+    };
     
     this.weapon.onAmmoChange = (current, reserve) => {
       this.hud.updateAmmo(current, reserve);
@@ -61,8 +81,11 @@ export class Game {
     };
 
     this.weapon.onFire = (hitResult) => {
-      if (hitResult.hit) {
-        console.log('Hit!', hitResult.object?.name || 'object');
+      if (hitResult.hit && hitResult.object) {
+        const killed = this.enemyManager.handleHit(hitResult.object, this.weapon.getDamage());
+        if (killed) {
+          console.log('Enemy killed!');
+        }
       }
     };
     
@@ -219,6 +242,26 @@ export class Game {
 
   private update(deltaTime: number): void {
     this.player.update(deltaTime);
+    this.enemyManager.update(deltaTime, this.player.getPosition());
+  }
+
+  private flashDamage(): void {
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      width: '100%',
+      height: '100%',
+      backgroundColor: 'rgba(255, 0, 0, 0.3)',
+      pointerEvents: 'none',
+      zIndex: '999',
+    });
+    document.body.appendChild(overlay);
+    
+    setTimeout(() => {
+      document.body.removeChild(overlay);
+    }, 100);
   }
 
   public getScene(): THREE.Scene {

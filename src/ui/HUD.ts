@@ -5,6 +5,8 @@ export class HUD {
   private ammoDisplay: HTMLDivElement;
   private ammoText: HTMLSpanElement;
   private reloadIndicator: HTMLDivElement;
+  private scoreText: HTMLSpanElement;
+  private waveText: HTMLSpanElement;
 
   constructor() {
     this.container = document.createElement('div');
@@ -13,6 +15,8 @@ export class HUD {
     this.ammoDisplay = document.createElement('div');
     this.ammoText = document.createElement('span');
     this.reloadIndicator = document.createElement('div');
+    this.scoreText = document.createElement('span');
+    this.waveText = document.createElement('span');
     
     this.init();
   }
@@ -112,6 +116,36 @@ export class HUD {
     this.ammoDisplay.appendChild(this.reloadIndicator);
 
     this.container.appendChild(this.ammoDisplay);
+
+    const scoreContainer = document.createElement('div');
+    Object.assign(scoreContainer.style, {
+      position: 'fixed',
+      top: '20px',
+      right: '20px',
+      textAlign: 'right',
+    });
+
+    Object.assign(this.scoreText.style, {
+      color: 'white',
+      fontSize: '24px',
+      fontWeight: 'bold',
+      textShadow: '2px 2px 4px black',
+      display: 'block',
+    });
+    this.scoreText.textContent = 'SCORE: 0';
+    scoreContainer.appendChild(this.scoreText);
+
+    Object.assign(this.waveText.style, {
+      color: '#aaa',
+      fontSize: '16px',
+      textShadow: '1px 1px 2px black',
+      display: 'block',
+      marginTop: '5px',
+    });
+    this.waveText.textContent = 'WAVE 1';
+    scoreContainer.appendChild(this.waveText);
+
+    document.body.appendChild(scoreContainer);
   }
 
   public show(): void {
@@ -151,6 +185,14 @@ export class HUD {
 
   public showReloading(show: boolean): void {
     this.reloadIndicator.style.opacity = show ? '1' : '0';
+  }
+
+  public updateScore(score: number): void {
+    this.scoreText.textContent = `SCORE: ${score}`;
+  }
+
+  public updateWave(wave: number): void {
+    this.waveText.textContent = `WAVE ${wave}`;
   }
 
   public getElement(): HTMLDivElement {
