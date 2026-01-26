@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FPSControls } from '../controls/FPSControls';
 import { InputManager, KeyState } from '../controls/InputManager';
+import { Weapon } from '../weapons/Weapon';
 
 export interface PlayerConfig {
   moveSpeed: number;
@@ -23,6 +24,8 @@ export class Player {
   
   private health: number = 100;
   private maxHealth: number = 100;
+  
+  private weapon: Weapon | null = null;
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -56,6 +59,8 @@ export class Player {
     
     this.handleMovement(keyState, deltaTime);
     this.handleJumpAndGravity(keyState, deltaTime);
+    this.handleShooting(keyState);
+    this.handleReload(keyState);
     
     this.camera.position.copy(this.position);
   }
@@ -159,5 +164,31 @@ export class Player {
     this.velocity.set(0, 0, 0);
     this.isGrounded = true;
     this.camera.position.copy(this.position);
+  }
+
+  public setWeapon(weapon: Weapon): void {
+    this.weapon = weapon;
+  }
+
+  public getWeapon(): Weapon | null {
+    return this.weapon;
+  }
+
+  private handleShooting(keyState: KeyState): void {
+    if (!this.weapon) return;
+    
+    if (keyState.shoot) {
+      this.weapon.fire();
+    } else {
+      this.weapon.releaseTrigger();
+    }
+  }
+
+  private handleReload(keyState: KeyState): void {
+    if (!this.weapon) return;
+    
+    if (keyState.reload) {
+      this.weapon.reload();
+    }
   }
 }

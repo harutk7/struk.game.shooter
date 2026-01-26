@@ -5,6 +5,8 @@ import { Player } from '../player/Player';
 import { Crosshair } from '../ui/Crosshair';
 import { StartOverlay } from '../ui/StartOverlay';
 import { GameClock } from '../utils/GameClock';
+import { Weapon } from '../weapons/Weapon';
+import { HUD } from '../ui/HUD';
 
 export class Game {
   private container: HTMLElement;
@@ -20,6 +22,8 @@ export class Game {
   
   private crosshair: Crosshair;
   private startOverlay: StartOverlay;
+  private weapon: Weapon;
+  private hud: HUD;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -36,9 +40,31 @@ export class Game {
     this.fpsControls = new FPSControls(this.camera, this.renderer.domElement);
     this.inputManager = new InputManager();
     this.player = new Player(this.camera, this.fpsControls, this.inputManager);
+    this.weapon = new Weapon(this.camera, this.scene, 'PISTOL');
+    this.hud = new HUD();
     
     this.crosshair = new Crosshair();
     this.startOverlay = new StartOverlay();
+    
+    this.player.setWeapon(this.weapon);
+    
+    this.weapon.onAmmoChange = (current, reserve) => {
+      this.hud.updateAmmo(current, reserve);
+    };
+
+    this.weapon.onReloadStart = () => {
+      this.hud.showReloading(true);
+    };
+
+    this.weapon.onReloadEnd = () => {
+      this.hud.showReloading(false);
+    };
+
+    this.weapon.onFire = (hitResult) => {
+      if (hitResult.hit) {
+        console.log('Hit!', hitResult.object?.name || 'object');
+      }
+    };
     
     this.init();
   }
@@ -64,6 +90,7 @@ export class Game {
     this.fpsControls.onLock = () => {
       this.startOverlay.hide();
       this.crosshair.show();
+      this.hud.show();
       this.clock.start();
       console.log('Game active');
     };
@@ -71,12 +98,17 @@ export class Game {
     this.fpsControls.onUnlock = () => {
       this.startOverlay.show();
       this.crosshair.hide();
+      this.hud.hide();
       this.clock.stop();
       console.log('Game paused');
     };
 
     this.startOverlay.show();
     this.crosshair.hide();
+    this.hud.hide();
+    
+    this.hud.updateHealth(100, 100);
+    this.hud.updateAmmo(this.weapon.getCurrentAmmo(), this.weapon.getReserveAmmo());
 
     window.addEventListener('resize', this.onWindowResize.bind(this));
   }
