@@ -66,36 +66,33 @@ export class Player {
   }
 
   private handleMovement(keyState: KeyState, deltaTime: number): void {
-    const forward = this.controls.getForwardDirection();
-    const right = this.controls.getRightDirection();
+    if (!this.controls.getIsLocked()) return;
+
+    const analog = this.inputManager.getAnalogMovement();
     
-    let speed = this.config.moveSpeed;
+    const forward = new THREE.Vector3();
+    const right = new THREE.Vector3();
+    
+    this.camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+    
+    right.crossVectors(forward, new THREE.Vector3(0, 1, 0));
+    
+    let moveSpeed = this.config.moveSpeed;
     if (keyState.sprint && this.isGrounded) {
-      speed *= this.config.sprintMultiplier;
+      moveSpeed *= this.config.sprintMultiplier;
     }
     
-    const moveDirection = new THREE.Vector3();
+    const velocity = new THREE.Vector3();
     
-    if (keyState.forward) {
-      moveDirection.add(forward);
-    }
-    if (keyState.backward) {
-      moveDirection.sub(forward);
+    if (analog.y !== 0 || analog.x !== 0) {
+      velocity.add(forward.multiplyScalar(analog.y * moveSpeed));
+      velocity.add(right.multiplyScalar(analog.x * moveSpeed));
     }
     
-    if (keyState.left) {
-      moveDirection.sub(right);
-    }
-    if (keyState.right) {
-      moveDirection.add(right);
-    }
-    
-    if (moveDirection.length() > 0) {
-      moveDirection.normalize();
-    }
-    
-    this.position.x += moveDirection.x * speed * deltaTime;
-    this.position.z += moveDirection.z * speed * deltaTime;
+    this.position.x += velocity.x * deltaTime;
+    this.position.z += velocity.z * deltaTime;
   }
 
   private handleJumpAndGravity(keyState: KeyState, deltaTime: number): void {

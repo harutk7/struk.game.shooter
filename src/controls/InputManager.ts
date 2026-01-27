@@ -9,9 +9,12 @@ export interface KeyState {
   shoot: boolean;
 }
 
+import { MobileControlsManager } from './MobileControlsManager';
+
 export class InputManager {
   private keyState: KeyState;
   private keyMap: Map<string, keyof KeyState>;
+  private mobileControls: MobileControlsManager | null = null;
 
   constructor() {
     this.keyState = {
@@ -37,6 +40,10 @@ export class InputManager {
     ]);
 
     this.init();
+  }
+
+  public setMobileControls(controls: MobileControlsManager): void {
+    this.mobileControls = controls;
   }
 
   private init(): void {
@@ -75,7 +82,42 @@ export class InputManager {
   }
 
   public getKeyState(): KeyState {
-    return { ...this.keyState };
+    const state = { ...this.keyState };
+    
+    if (this.mobileControls && this.mobileControls.isEnabled()) {
+      const movement = this.mobileControls.getMovement();
+      const actions = this.mobileControls.getActions();
+      
+      if (movement.active) {
+        if (movement.y > 0.3) state.forward = true;
+        if (movement.y < -0.3) state.backward = true;
+        if (movement.x < -0.3) state.left = true;
+        if (movement.x > 0.3) state.right = true;
+      }
+      
+      if (actions.shoot) state.shoot = true;
+      if (actions.reload) state.reload = true;
+      if (actions.jump) state.jump = true;
+    }
+    
+    return state;
+  }
+
+  public getAnalogMovement(): { x: number; y: number } {
+    if (this.mobileControls && this.mobileControls.isEnabled()) {
+      const movement = this.mobileControls.getMovement();
+      if (movement.active) {
+        return { x: movement.x, y: movement.y };
+      }
+    }
+    
+    let x = 0, y = 0;
+    if (this.keyState.forward) y += 1;
+    if (this.keyState.backward) y -= 1;
+    if (this.keyState.left) x -= 1;
+    if (this.keyState.right) x += 1;
+    
+    return { x, y };
   }
 
   public isMoving(): boolean {

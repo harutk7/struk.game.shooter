@@ -1,3 +1,5 @@
+import { DeviceDetection } from '../utils/DeviceDetection';
+
 export class StartOverlay {
   private element: HTMLDivElement;
   private onClick: (() => void) | null = null;
@@ -34,8 +36,10 @@ export class StartOverlay {
     });
     this.element.appendChild(title);
 
+    const isMobile = DeviceDetection.isTouchDevice();
+    
     const instructions = document.createElement('p');
-    instructions.textContent = 'Click to Play';
+    instructions.textContent = isMobile ? 'TAP TO START' : 'CLICK TO PLAY';
     Object.assign(instructions.style, {
       color: '#aaa',
       fontSize: '24px',
@@ -44,12 +48,29 @@ export class StartOverlay {
     });
     this.element.appendChild(instructions);
 
+    if (isMobile) {
+      const mobileInstructions = document.createElement('p');
+      mobileInstructions.textContent = 'Use left joystick to move, swipe right side to look';
+      Object.assign(mobileInstructions.style, {
+        color: '#888',
+        fontSize: '14px',
+        marginTop: '20px',
+      });
+      this.element.appendChild(mobileInstructions);
+    }
+
     const controls = document.createElement('div');
-    controls.innerHTML = `
+    controls.innerHTML = isMobile
+      ? `
+      <p style="color: #666; font-size: 14px; margin-top: 40px; font-family: Arial, sans-serif;">
+        Left Joystick - Move | Right Swipe - Look | Buttons - Action
+      </p>
+      `
+      : `
       <p style="color: #666; font-size: 14px; margin-top: 40px; font-family: Arial, sans-serif;">
         WASD - Move | Mouse - Look | Left Click - Shoot | ESC - Pause
       </p>
-    `;
+      `;
     this.element.appendChild(controls);
 
     const style = document.createElement('style');
@@ -71,9 +92,17 @@ export class StartOverlay {
 
   public setOnClick(callback: () => void): void {
     this.onClick = callback;
-    this.element.addEventListener('click', () => {
-      if (this.onClick) this.onClick();
-    });
+    
+    if (DeviceDetection.isTouchDevice()) {
+      this.element.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (this.onClick) this.onClick();
+      }, { passive: false });
+    } else {
+      this.element.addEventListener('click', () => {
+        if (this.onClick) this.onClick();
+      });
+    }
   }
 
   public hide(): void {

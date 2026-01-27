@@ -10,6 +10,7 @@ import { HUD } from '../ui/HUD';
 import { EnemyManager } from '../enemies/EnemyManager';
 import { World } from '../world/World';
 import { Skybox } from '../world/Skybox';
+import { DeviceDetection } from '../utils/DeviceDetection';
 
 export class Game {
   private container: HTMLElement;
@@ -112,6 +113,15 @@ export class Game {
 
     this.scene.fog = new THREE.Fog(0x87ceeb, 10, 100);
 
+    const isMobile = DeviceDetection.isTouchDevice();
+
+    if (isMobile) {
+      const mobileControls = this.fpsControls.getMobileControls();
+      if (mobileControls) {
+        this.inputManager.setMobileControls(mobileControls);
+      }
+    }
+
     this.setupLighting();
 
     this.startOverlay.setOnClick(() => {
@@ -123,6 +133,12 @@ export class Game {
       this.crosshair.show();
       this.hud.show();
       this.clock.start();
+      
+      if (isMobile) {
+        const mobileControls = this.fpsControls.getMobileControls();
+        if (mobileControls) mobileControls.enable();
+      }
+      
       console.log('Game active');
     };
 
@@ -131,6 +147,12 @@ export class Game {
       this.crosshair.hide();
       this.hud.hide();
       this.clock.stop();
+      
+      if (isMobile) {
+        const mobileControls = this.fpsControls.getMobileControls();
+        if (mobileControls) mobileControls.disable();
+      }
+      
       console.log('Game paused');
     };
 

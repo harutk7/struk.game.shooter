@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { MobileControlsManager } from './MobileControlsManager';
+import { DeviceDetection } from '../utils/DeviceDetection';
 
 export class FPSControls {
   private camera: THREE.Camera;
@@ -14,6 +16,9 @@ export class FPSControls {
   private minPolarAngle: number = 0;
   private maxPolarAngle: number = Math.PI;
 
+  private mobileControls: MobileControlsManager | null = null;
+  private isMobile: boolean = false;
+
   public onLock: (() => void) | null = null;
   public onUnlock: (() => void) | null = null;
 
@@ -22,7 +27,29 @@ export class FPSControls {
     this.domElement = domElement;
     this.euler = new THREE.Euler(0, 0, 0, 'YXZ');
     
+    this.isMobile = DeviceDetection.isTouchDevice();
+
+    if (this.isMobile) {
+      this.mobileControls = new MobileControlsManager();
+      this.mobileControls.onLook = (deltaX, deltaY) => {
+        this.handleMobileLook(deltaX, deltaY);
+      };
+    }
+    
     this.init();
+  }
+
+  private handleMobileLook(deltaX: number, deltaY: number): void {
+    if (!this.isLocked) return;
+
+    this.euler.setFromQuaternion(this.camera.quaternion);
+    
+    this.euler.y -= deltaX * 0.01;
+    this.euler.x -= deltaY * 0.01;
+    
+    this.euler.x = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.euler.x));
+    
+    this.camera.quaternion.setFromEuler(this.euler);
   }
 
   private init(): void {
@@ -68,15 +95,29 @@ export class FPSControls {
   }
 
   public lock(): void {
-    this.domElement.requestPointerLock();
+    if (this.isMobile) {
+      this.isLocked = true;
+      if (this.onLock) this.onLock();
+    } else {
+      this.domElement.requestPointerLock();
+    }
   }
 
   public unlock(): void {
-    document.exitPointerLock();
+    if (this.isMobile) {
+      this.isLocked = false;
+      if (this.onUnlock) this.onUnlock();
+    } else {
+      document.exitPointerLock();
+    }
   }
 
   public getIsLocked(): boolean {
     return this.isLocked;
+  }
+
+  public getMobileControls(): MobileControlsManager | null {
+    return this.mobileControls;
   }
 
   public setSensitivity(sensitivity: number): void {
