@@ -1,179 +1,85 @@
-export interface JoystickState {
-  active: boolean;
-  x: number;
-  y: number;
-  angle: number;
-  distance: number;
-}
+export interface JoystickState { active: boolean; x: number; y: number; angle: number; distance: number; }
 
 export class VirtualJoystick {
   private container: HTMLDivElement;
   private base: HTMLDivElement;
   private stick: HTMLDivElement;
-  private state: JoystickState;
-  
-  private baseRadius: number = 60;
-  private stickRadius: number = 30;
-  private maxDistance: number = 50;
-  
+  private state: JoystickState = { active: false, x: 0, y: 0, angle: 0, distance: 0 };
+  private baseRadius = 60;
+  private stickRadius = 28;
+  private maxDistance = 48;
   private touchId: number | null = null;
-  private baseX: number = 0;
-  private baseY: number = 0;
+  private baseX = 0;
+  private baseY = 0;
+  private deadZone = 0.1;
 
   constructor(side: 'left' | 'right' = 'left') {
     this.container = document.createElement('div');
     this.base = document.createElement('div');
     this.stick = document.createElement('div');
-    
-    this.state = {
-      active: false,
-      x: 0,
-      y: 0,
-      angle: 0,
-      distance: 0,
-    };
-
-    this.init(side);
+    Object.assign(this.container.style, { position: 'fixed', bottom: '40px', [side]: '40px', width: `${this.baseRadius * 2}px`, height: `${this.baseRadius * 2}px`, zIndex: '2000', touchAction: 'none', display: 'none' });
+    Object.assign(this.base.style, { position: 'absolute', width: '100%', height: '100%', borderRadius: '50%', backgroundColor: 'rgba(255,255,255,0.12)', border: '2px solid rgba(255,255,255,0.25)', boxSizing: 'border-box' });
+    Object.assign(this.stick.style, { position: 'absolute', width: `${this.stickRadius * 2}px`, height: `${this.stickRadius * 2}px`, borderRadius: '50%', backgroundColor: 'rgba(255,255,255,0.5)', border: '2px solid rgba(255,255,255,0.7)', left: `${this.baseRadius - this.stickRadius}px`, top: `${this.baseRadius - this.stickRadius}px`, boxSizing: 'border-box', transition: 'none' });
+    this.container.append(this.base, this.stick);
+    this.container.addEventListener('touchstart', this.onStart.bind(this), { passive: false });
+    document.addEventListener('touchmove', this.onMove.bind(this), { passive: false });
+    document.addEventListener('touchend', this.onEnd.bind(this), { passive: false });
+    document.addEventListener('touchcancel', this.onEnd.bind(this), { passive: false });
   }
 
-  private init(side: 'left' | 'right'): void {
-    Object.assign(this.container.style, {
-      position: 'fixed',
-      bottom: '30px',
-      [side]: '30px',
-      width: `${this.baseRadius * 2}px`,
-      height: `${this.baseRadius * 2}px`,
-      zIndex: '2000',
-      touchAction: 'none',
-    });
-
-    Object.assign(this.base.style, {
-      position: 'absolute',
-      width: '100%',
-      height: '100%',
-      borderRadius: '50%',
-      backgroundColor: 'rgba(255, 255, 255, 0.2)',
-      border: '3px solid rgba(255, 255, 255, 0.4)',
-      boxSizing: 'border-box',
-    });
-
-    Object.assign(this.stick.style, {
-      position: 'absolute',
-      width: `${this.stickRadius * 2}px`,
-      height: `${this.stickRadius * 2}px`,
-      borderRadius: '50%',
-      backgroundColor: 'rgba(255, 255, 255, 0.6)',
-      border: '2px solid rgba(255, 255, 255, 0.8)',
-      left: `${this.baseRadius - this.stickRadius}px`,
-      top: `${this.baseRadius - this.stickRadius}px`,
-      transition: 'none',
-      boxSizing: 'border-box',
-    });
-
-    this.container.appendChild(this.base);
-    this.container.appendChild(this.stick);
-
-    this.setupEventListeners();
-  }
-
-  private setupEventListeners(): void {
-    this.container.addEventListener('touchstart', this.onTouchStart.bind(this), { passive: false });
-    document.addEventListener('touchmove', this.onTouchMove.bind(this), { passive: false });
-    document.addEventListener('touchend', this.onTouchEnd.bind(this), { passive: false });
-    document.addEventListener('touchcancel', this.onTouchEnd.bind(this), { passive: false });
-  }
-
-  private onTouchStart(e: TouchEvent): void {
+  private onStart(e: TouchEvent): void {
     e.preventDefault();
-    
     if (this.touchId !== null) return;
-    
-    const touch = e.changedTouches[0];
-    this.touchId = touch.identifier;
-    
-    const rect = this.container.getBoundingClientRect();
-    this.baseX = rect.left + this.baseRadius;
-    this.baseY = rect.top + this.baseRadius;
-    
-    this.updateStickPosition(touch.clientX, touch.clientY);
+    const t = e.changedTouches[0];
+    this.touchId = t.identifier;
+    const r = this.container.getBoundingClientRect();
+    this.baseX = r.left + this.baseRadius;
+    this.baseY = r.top + this.baseRadius;
+    this.updateStick(t.clientX, t.clientY);
   }
 
-  private onTouchMove(e: TouchEvent): void {
+  private onMove(e: TouchEvent): void {
     if (this.touchId === null) return;
-    
     for (let i = 0; i < e.changedTouches.length; i++) {
-      const touch = e.changedTouches[i];
-      if (touch.identifier === this.touchId) {
+      if (e.changedTouches[i].identifier === this.touchId) {
         e.preventDefault();
-        this.updateStickPosition(touch.clientX, touch.clientY);
+        this.updateStick(e.changedTouches[i].clientX, e.changedTouches[i].clientY);
         break;
       }
     }
   }
 
-  private onTouchEnd(e: TouchEvent): void {
+  private onEnd(e: TouchEvent): void {
     for (let i = 0; i < e.changedTouches.length; i++) {
       if (e.changedTouches[i].identifier === this.touchId) {
         this.touchId = null;
-        this.resetStick();
+        this.stick.style.left = `${this.baseRadius - this.stickRadius}px`;
+        this.stick.style.top = `${this.baseRadius - this.stickRadius}px`;
+        this.state = { active: false, x: 0, y: 0, angle: 0, distance: 0 };
         break;
       }
     }
   }
 
-  private updateStickPosition(touchX: number, touchY: number): void {
-    let deltaX = touchX - this.baseX;
-    let deltaY = touchY - this.baseY;
-    
-    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-    const angle = Math.atan2(deltaY, deltaX);
-    
-    const clampedDistance = Math.min(distance, this.maxDistance);
-    
-    if (distance > this.maxDistance) {
-      deltaX = Math.cos(angle) * this.maxDistance;
-      deltaY = Math.sin(angle) * this.maxDistance;
-    }
-    
-    this.stick.style.left = `${this.baseRadius - this.stickRadius + deltaX}px`;
-    this.stick.style.top = `${this.baseRadius - this.stickRadius + deltaY}px`;
-    
-    this.state.active = true;
-    this.state.x = deltaX / this.maxDistance;
-    this.state.y = -deltaY / this.maxDistance;
+  private updateStick(tx: number, ty: number): void {
+    let dx = tx - this.baseX;
+    let dy = ty - this.baseY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const angle = Math.atan2(dy, dx);
+    const clamped = Math.min(dist, this.maxDistance);
+    if (dist > this.maxDistance) { dx = Math.cos(angle) * this.maxDistance; dy = Math.sin(angle) * this.maxDistance; }
+    this.stick.style.left = `${this.baseRadius - this.stickRadius + dx}px`;
+    this.stick.style.top = `${this.baseRadius - this.stickRadius + dy}px`;
+    const nd = clamped / this.maxDistance;
+    this.state.active = nd > this.deadZone;
+    this.state.x = this.state.active ? dx / this.maxDistance : 0;
+    this.state.y = this.state.active ? -dy / this.maxDistance : 0;
     this.state.angle = angle;
-    this.state.distance = clampedDistance / this.maxDistance;
+    this.state.distance = nd;
   }
 
-  private resetStick(): void {
-    this.stick.style.left = `${this.baseRadius - this.stickRadius}px`;
-    this.stick.style.top = `${this.baseRadius - this.stickRadius}px`;
-    
-    this.state.active = false;
-    this.state.x = 0;
-    this.state.y = 0;
-    this.state.angle = 0;
-    this.state.distance = 0;
-  }
-
-  public getState(): JoystickState {
-    return { ...this.state };
-  }
-
-  public show(): void {
-    if (!document.body.contains(this.container)) {
-      document.body.appendChild(this.container);
-    }
-    this.container.style.display = 'block';
-  }
-
-  public hide(): void {
-    this.container.style.display = 'none';
-  }
-
-  public dispose(): void {
-    if (document.body.contains(this.container)) {
-      document.body.removeChild(this.container);
-    }
-  }
+  getState(): JoystickState { return { ...this.state }; }
+  show(): void { if (!document.body.contains(this.container)) document.body.appendChild(this.container); this.container.style.display = 'block'; }
+  hide(): void { this.container.style.display = 'none'; }
+  dispose(): void { if (document.body.contains(this.container)) document.body.removeChild(this.container); }
 }

@@ -1,88 +1,65 @@
 export class Crosshair {
-  private element: HTMLDivElement;
+  private container: HTMLDivElement;
+  private top: HTMLDivElement;
+  private bottom: HTMLDivElement;
+  private left: HTMLDivElement;
+  private right: HTMLDivElement;
+  private gap = 6;
 
   constructor() {
-    this.element = document.createElement('div');
+    this.container = document.createElement('div');
+    this.top = document.createElement('div');
+    this.bottom = document.createElement('div');
+    this.left = document.createElement('div');
+    this.right = document.createElement('div');
     this.init();
   }
 
   private init(): void {
-    Object.assign(this.element.style, {
-      position: 'fixed',
-      top: '50%',
-      left: '50%',
-      transform: 'translate(-50%, -50%)',
-      width: '20px',
-      height: '20px',
-      pointerEvents: 'none',
-      zIndex: '1000',
+    Object.assign(this.container.style, {
+      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+      pointerEvents: 'none', zIndex: '1001', display: 'none',
     });
-
-    const createLine = (isHorizontal: boolean) => {
-      const line = document.createElement('div');
-      Object.assign(line.style, {
-        position: 'absolute',
-        backgroundColor: 'white',
-        boxShadow: '0 0 2px black',
+    const ls = (w: string, h: string, x: string, y: string) => {
+      const d = document.createElement('div');
+      Object.assign(d.style, {
+        position: 'absolute', backgroundColor: 'rgba(255,255,255,0.85)',
+        width: w, height: h, left: x, top: y,
+        boxShadow: '0 0 2px rgba(0,0,0,0.5)', transition: 'all 0.08s ease-out',
       });
-
-      if (isHorizontal) {
-        Object.assign(line.style, {
-          width: '12px',
-          height: '2px',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-        });
-      } else {
-        Object.assign(line.style, {
-          width: '2px',
-          height: '12px',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-        });
-      }
-
-      return line;
+      return d;
     };
-
-    this.element.appendChild(createLine(true));
-    this.element.appendChild(createLine(false));
-
+    this.top = ls('2px', '10px', '-1px', `-${this.gap + 10}px`);
+    this.bottom = ls('2px', '10px', '-1px', `${this.gap}px`);
+    this.left = ls('10px', '2px', `-${this.gap + 10}px`, '-1px');
+    this.right = ls('10px', '2px', `${this.gap}px`, '-1px');
     const dot = document.createElement('div');
-    Object.assign(dot.style, {
-      position: 'absolute',
-      width: '4px',
-      height: '4px',
-      backgroundColor: 'white',
-      borderRadius: '50%',
-      top: '50%',
-      left: '50%',
-      transform: 'translate(-50%, -50%)',
-      boxShadow: '0 0 2px black',
-    });
-    this.element.appendChild(dot);
+    Object.assign(dot.style, { position: 'absolute', width: '3px', height: '3px', backgroundColor: 'rgba(255,255,255,0.5)', borderRadius: '50%', left: '-1.5px', top: '-1.5px' });
+    this.container.append(this.top, this.bottom, this.left, this.right, dot);
   }
 
-  public show(): void {
-    if (!document.body.contains(this.element)) {
-      document.body.appendChild(this.element);
-    }
-    this.element.style.display = 'block';
+  show(): void {
+    if (!document.body.contains(this.container)) document.body.appendChild(this.container);
+    this.container.style.display = 'block';
+  }
+  hide(): void { this.container.style.display = 'none'; }
+
+  setSpread(spread: number): void {
+    const g = this.gap + spread * 8;
+    this.top.style.top = `-${g + 10}px`;
+    this.bottom.style.top = `${g}px`;
+    this.left.style.left = `-${g + 10}px`;
+    this.right.style.left = `${g}px`;
   }
 
-  public hide(): void {
-    this.element.style.display = 'none';
+  flashHit(): void {
+    [this.top, this.bottom, this.left, this.right].forEach(el => el.style.backgroundColor = 'rgba(255,50,50,0.9)');
+    setTimeout(() => {
+      [this.top, this.bottom, this.left, this.right].forEach(el => el.style.backgroundColor = 'rgba(255,255,255,0.85)');
+    }, 80);
   }
 
-  public getElement(): HTMLDivElement {
-    return this.element;
-  }
-
-  public dispose(): void {
-    if (document.body.contains(this.element)) {
-      document.body.removeChild(this.element);
-    }
+  dispose(): void {
+    if (document.body.contains(this.container)) document.body.removeChild(this.container);
   }
 }

@@ -1,259 +1,357 @@
 import * as THREE from 'three';
-import { FPSControls } from '../controls/FPSControls';
-import { InputManager } from '../controls/InputManager';
-import { Player } from '../player/Player';
-import { Crosshair } from '../ui/Crosshair';
-import { StartOverlay } from '../ui/StartOverlay';
-import { GameClock } from '../utils/GameClock';
-import { Weapon } from '../weapons/Weapon';
+import { EventBus } from '../core/EventBus';
+import type { GameEvents } from '../core/GameEvents';
+import { GameState } from '../core/GameState';
+import { InputSystem } from '../systems/InputSystem';
+import { PhysicsSystem } from '../systems/PhysicsSystem';
+import { CombatSystem } from '../systems/CombatSystem';
+import { SpawnSystem } from '../systems/SpawnSystem';
+import { WeaponSystem } from '../systems/WeaponSystem';
+import { Renderer } from '../rendering/Renderer';
+import { SceneBuilder } from '../rendering/SceneBuilder';
+import { Skybox } from '../rendering/Skybox';
+import { EnemyRenderer } from '../rendering/EnemyRenderer';
+import { WeaponRenderer } from '../rendering/WeaponRenderer';
+import { Effects } from '../rendering/Effects';
 import { HUD } from '../ui/HUD';
-import { EnemyManager } from '../enemies/EnemyManager';
-import { World } from '../world/World';
-import { Skybox } from '../world/Skybox';
-import { DeviceDetection } from '../utils/DeviceDetection';
+import { Crosshair } from '../ui/Crosshair';
+import { StartScreen } from '../ui/StartScreen';
+import { GameOverScreen } from '../ui/GameOverScreen';
+import { PauseScreen } from '../ui/PauseScreen';
+import { KillFeed } from '../ui/KillFeed';
+import { VirtualJoystick } from '../ui/mobile/VirtualJoystick';
+import { TouchLookController } from '../ui/mobile/TouchLookController';
+import { TouchActionButtons } from '../ui/mobile/TouchActionButtons';
+import type { PlayerState } from '../models/Player';
+import { createPlayer, tickInvincibility, tickPowerUps, addPowerUp } from '../models/Player';
+import type { EnemyData } from '../models/Enemy';
+import { isEnemyAlive } from '../models/Enemy';
+import type { PowerUpData } from '../models/PowerUp';
+import { tickPowerUpLifetime, isPowerUpExpired, getPowerUpConfig } from '../models/PowerUp';
+import type { ScoreState } from '../models/ScoreManager';
+import { createScoreState, addKill, tickCombo } from '../models/ScoreManager';
+import type { WaveState } from '../models/WaveManager';
+import { createWaveState, tickWave, registerKill } from '../models/WaveManager';
+import { getWeaponConfig } from '../models/Weapon';
 
 export class Game {
-  private container: HTMLElement;
-  private scene: THREE.Scene;
-  private camera: THREE.PerspectiveCamera;
-  private renderer: THREE.WebGLRenderer;
-  private isRunning: boolean = false;
-  
-  private fpsControls: FPSControls;
-  private inputManager: InputManager;
-  private player: Player;
-  private clock: GameClock;
-  
-  private crosshair: Crosshair;
-  private startOverlay: StartOverlay;
-  private weapon: Weapon;
+  private bus = new EventBus<GameEvents>();
+  private state = new GameState();
+  private input: InputSystem;
+  private physics: PhysicsSystem;
+  private combat: CombatSystem;
+  private spawner: SpawnSystem;
+  private weapons: WeaponSystem;
+  private renderer: Renderer;
+  private sceneBuilder!: SceneBuilder;
+  private skybox!: Skybox;
+  private enemyRenderer!: EnemyRenderer;
+  private weaponRenderer!: WeaponRenderer;
+  private effects!: Effects;
   private hud: HUD;
-  private enemyManager: EnemyManager;
-  private score: number = 0;
-  private world: World;
-  private skybox: Skybox;
+  private crosshair: Crosshair;
+  private startScreen: StartScreen;
+  private gameOverScreen: GameOverScreen;
+  private pauseScreen: PauseScreen;
+  private killFeed: KillFeed;
+  private joystick: VirtualJoystick;
+  private lookController: TouchLookController;
+  private actionButtons: TouchActionButtons;
+  private player: PlayerState;
+  private enemies: EnemyData[] = [];
+  private powerUps: PowerUpData[] = [];
+  private score: ScoreState;
+  private wave: WaveState;
+  private animFrameId = 0;
+  private lastTime = 0;
 
   constructor(container: HTMLElement) {
-    this.container = container;
-    this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(
-      75,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      1000
-    );
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    
-    this.clock = new GameClock();
-    this.fpsControls = new FPSControls(this.camera, this.renderer.domElement);
-    this.inputManager = new InputManager();
-    this.player = new Player(this.camera, this.fpsControls, this.inputManager);
-    this.weapon = new Weapon(this.camera, this.scene, 'PISTOL');
+    this.input = new InputSystem();
+    this.physics = new PhysicsSystem();
+    this.combat = new CombatSystem(this.bus);
+    this.spawner = new SpawnSystem(this.bus, this.physics);
+    this.weapons = new WeaponSystem(this.bus);
+    this.renderer = new Renderer(container);
     this.hud = new HUD();
-    this.enemyManager = new EnemyManager(this.scene);
-    
     this.crosshair = new Crosshair();
-    this.startOverlay = new StartOverlay();
-    
-    this.player.setWeapon(this.weapon);
-    
-    this.enemyManager.onEnemyKilled = (points) => {
-      this.score += points;
-      this.hud.updateScore(this.score);
-      console.log(`Enemy killed! +${points} points. Total: ${this.score}`);
-    };
-
-    this.enemyManager.onPlayerDamaged = (damage) => {
-      this.player.takeDamage(damage);
-      this.hud.updateHealth(this.player.getHealth(), this.player.getMaxHealth());
-      this.flashDamage();
-    };
-
-    this.enemyManager.onWaveComplete = (waveNumber) => {
-      console.log(`Wave ${waveNumber} complete!`);
-    };
-    
-    this.weapon.onAmmoChange = (current, reserve) => {
-      this.hud.updateAmmo(current, reserve);
-    };
-
-    this.weapon.onReloadStart = () => {
-      this.hud.showReloading(true);
-    };
-
-    this.weapon.onReloadEnd = () => {
-      this.hud.showReloading(false);
-    };
-
-    this.weapon.onFire = (hitResult) => {
-      if (hitResult.hit && hitResult.object) {
-        const killed = this.enemyManager.handleHit(hitResult.object, this.weapon.getDamage());
-        if (killed) {
-          console.log('Enemy killed!');
-        }
-      }
-    };
-    
-    this.world = new World(this.scene, {
-      width: 50,
-      depth: 50,
-      wallHeight: 5,
-    });
-    this.skybox = new Skybox(this.scene);
-    
+    this.startScreen = new StartScreen();
+    this.gameOverScreen = new GameOverScreen();
+    this.pauseScreen = new PauseScreen();
+    this.killFeed = new KillFeed();
+    this.joystick = new VirtualJoystick('left');
+    this.lookController = new TouchLookController();
+    this.actionButtons = new TouchActionButtons();
+    this.player = createPlayer();
+    this.score = createScoreState();
+    this.wave = createWaveState();
     this.init();
   }
 
   private init(): void {
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(window.devicePixelRatio);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.container.appendChild(this.renderer.domElement);
+    this.sceneBuilder = new SceneBuilder(this.renderer.scene);
+    const colliders = this.sceneBuilder.build();
+    this.physics.setColliders(colliders);
+    this.skybox = new Skybox(this.renderer.scene);
+    this.enemyRenderer = new EnemyRenderer(this.renderer.scene);
+    this.weaponRenderer = new WeaponRenderer(this.renderer.scene, this.renderer.camera);
+    this.effects = new Effects(this.renderer.scene, this.renderer.camera);
+    this.input.attach(this.renderer.domElement);
 
-    this.scene.fog = new THREE.Fog(0x87ceeb, 10, 100);
-
-    const isMobile = DeviceDetection.isTouchDevice();
-
-    if (isMobile) {
-      const mobileControls = this.fpsControls.getMobileControls();
-      if (mobileControls) {
-        this.inputManager.setMobileControls(mobileControls);
-      }
+    if (this.input.isMobileDevice) {
+      this.lookController.onLook = (dx, dy) => this.input.setMobileInput({ lookX: dx, lookY: dy });
     }
 
-    this.setupLighting();
+    this.wireEvents();
+    this.startScreen.setOnClick(() => this.startGame());
+    this.gameOverScreen.setOnRestart(() => this.restartGame());
+    this.pauseScreen.setOnResume(() => this.resumeGame());
+    this.pauseScreen.setOnQuit(() => this.quitToMenu());
+    this.startScreen.show();
+    this.state._forceSet('MENU');
+  }
 
-    this.startOverlay.setOnClick(() => {
-      this.fpsControls.lock();
+  private wireEvents(): void {
+    this.bus.on('playerDamaged', (d) => {
+      this.hud.updateHealth(d.currentHealth, d.maxHealth);
+      this.effects.flashDamage();
+      this.effects.triggerShake(0.05, 0.15);
+      this.crosshair.flashHit();
     });
-
-    this.fpsControls.onLock = () => {
-      this.startOverlay.hide();
-      this.crosshair.show();
-      this.hud.show();
-      this.clock.start();
-      
-      if (isMobile) {
-        const mobileControls = this.fpsControls.getMobileControls();
-        if (mobileControls) mobileControls.enable();
-      }
-      
-      console.log('Game active');
-    };
-
-    this.fpsControls.onUnlock = () => {
-      this.startOverlay.show();
-      this.crosshair.hide();
-      this.hud.hide();
-      this.clock.stop();
-      
-      if (isMobile) {
-        const mobileControls = this.fpsControls.getMobileControls();
-        if (mobileControls) mobileControls.disable();
-      }
-      
-      console.log('Game paused');
-    };
-
-    this.startOverlay.show();
-    this.crosshair.hide();
-    this.hud.hide();
-    
-    this.hud.updateHealth(100, 100);
-    this.hud.updateAmmo(this.weapon.getCurrentAmmo(), this.weapon.getReserveAmmo());
-
-    window.addEventListener('resize', this.onWindowResize.bind(this));
-  }
-
-  private setupLighting(): void {
-    const ambientLight = new THREE.AmbientLight(0x6688cc, 0.4);
-    this.scene.add(ambientLight);
-
-    const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x444444, 0.5);
-    hemiLight.position.set(0, 50, 0);
-    this.scene.add(hemiLight);
-
-    const sunLight = new THREE.DirectionalLight(0xffffcc, 1.2);
-    sunLight.position.set(30, 50, 30);
-    sunLight.castShadow = true;
-    sunLight.shadow.mapSize.width = 4096;
-    sunLight.shadow.mapSize.height = 4096;
-    sunLight.shadow.camera.near = 0.5;
-    sunLight.shadow.camera.far = 150;
-    sunLight.shadow.camera.left = -50;
-    sunLight.shadow.camera.right = 50;
-    sunLight.shadow.camera.top = 50;
-    sunLight.shadow.camera.bottom = -50;
-    sunLight.shadow.bias = -0.0001;
-    this.scene.add(sunLight);
-
-    const fillLight = new THREE.DirectionalLight(0x8888ff, 0.3);
-    fillLight.position.set(-20, 30, -20);
-    this.scene.add(fillLight);
-  }
-
-  private onWindowResize(): void {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-  }
-
-  public start(): void {
-    this.isRunning = true;
-    this.animate();
-    console.log('Game initialized! Click to play.');
-  }
-
-  private animate(): void {
-    if (!this.isRunning) return;
-    
-    requestAnimationFrame(this.animate.bind(this));
-    
-    const deltaTime = this.clock.update();
-    
-    this.update(deltaTime);
-    
-    this.renderer.render(this.scene, this.camera);
-  }
-
-  private update(deltaTime: number): void {
-    this.player.update(deltaTime);
-    
-    const playerPos = this.player.getPosition();
-    this.world.clampToArena(playerPos);
-    
-    this.enemyManager.update(deltaTime, this.player.getPosition());
-  }
-
-  private flashDamage(): void {
-    const overlay = document.createElement('div');
-    Object.assign(overlay.style, {
-      position: 'fixed',
-      top: '0',
-      left: '0',
-      width: '100%',
-      height: '100%',
-      backgroundColor: 'rgba(255, 0, 0, 0.3)',
-      pointerEvents: 'none',
-      zIndex: '999',
+    this.bus.on('playerHealed', (d) => this.hud.updateHealth(d.currentHealth, this.player.maxHealth));
+    this.bus.on('playerDied', () => this.handleGameOver());
+    this.bus.on('ammoChanged', (d) => this.hud.updateAmmo(d.ammo, d.reserve));
+    this.bus.on('weaponReloadStart', () => this.hud.showReloading(true));
+    this.bus.on('weaponReloadEnd', () => this.hud.showReloading(false));
+    this.bus.on('weaponSwitched', (d) => this.hud.updateWeapon(getWeaponConfig(d.to).name));
+    this.bus.on('enemyKilled', (d) => {
+      const result = addKill(this.score, d.points, performance.now() / 1000);
+      this.score = result.state;
+      this.hud.updateScore(this.score.score);
+      this.killFeed.addKill(result.pointsAwarded, d.type, result.comboActive ? this.score.combo : 0);
+      this.wave = registerKill(this.wave);
+      const pu = this.spawner.tryDropPowerUp(d.position);
+      if (pu) this.powerUps.push(pu);
     });
-    document.body.appendChild(overlay);
-    
-    setTimeout(() => {
-      document.body.removeChild(overlay);
-    }, 100);
+    this.bus.on('enemyDamaged', (d) => this.enemyRenderer.flashDamage(d.id));
+    this.bus.on('waveStarted', (d) => this.hud.updateWave(d.wave));
+    this.bus.on('waveCompleted', (d) => this.hud.updateWave(d.wave + 1));
+    this.bus.on('powerUpSpawned', (d) => {
+      const pu = this.powerUps.find(p => p.id === d.id);
+      if (pu) this.effects.createPowerUpMesh(pu);
+    });
   }
 
-  public getScene(): THREE.Scene {
-    return this.scene;
+  private startGame(): void {
+    this.state.transition('PLAYING');
+    this.input.lockPointer();
+    this.startScreen.hide();
+    this.crosshair.show();
+    this.hud.show();
+    this.hud.updateHealth(this.player.health, this.player.maxHealth);
+    this.hud.updateScore(0);
+    this.hud.updateWave(1);
+    this.hud.updateWeapon('Pistol');
+    this.weapons.initWeapons(this.player.ownedWeapons);
+    const wp = this.weapons.getCurrentWeapon(this.player);
+    if (wp) this.hud.updateAmmo(wp.currentAmmo, wp.reserveAmmo);
+    if (this.input.isMobileDevice) {
+      this.joystick.show(); this.lookController.show(); this.actionButtons.show();
+    }
+    this.lastTime = performance.now();
+    this.loop();
   }
 
-  public getCamera(): THREE.PerspectiveCamera {
-    return this.camera;
+  private handleGameOver(): void {
+    this.state.transition('GAME_OVER');
+    this.input.unlockPointer();
+    this.crosshair.hide(); this.hud.hide();
+    this.gameOverScreen.show(this.score.score, this.wave.waveNumber, this.score.kills);
+    if (this.input.isMobileDevice) {
+      this.joystick.hide(); this.lookController.hide(); this.actionButtons.hide();
+    }
   }
 
-  public getPlayer(): Player {
-    return this.player;
+  private restartGame(): void {
+    this.player = createPlayer();
+    this.enemies = []; this.powerUps = [];
+    this.score = createScoreState(); this.wave = createWaveState();
+    this.enemyRenderer.clear(); this.effects.clearPowerUps(); this.weapons.reset();
+    this.gameOverScreen.hide();
+    this.startGame();
+  }
+
+  private resumeGame(): void {
+    this.state.transition('PLAYING');
+    this.pauseScreen.hide(); this.input.lockPointer();
+    this.lastTime = performance.now(); this.loop();
+  }
+
+  private quitToMenu(): void {
+    this.state.transition('MENU');
+    this.pauseScreen.hide(); this.input.unlockPointer();
+    this.crosshair.hide(); this.hud.hide(); this.startScreen.show();
+    this.player = createPlayer();
+    this.enemies = []; this.powerUps = [];
+    this.score = createScoreState(); this.wave = createWaveState();
+    this.enemyRenderer.clear(); this.effects.clearPowerUps(); this.weapons.reset();
+  }
+
+  private loop = (): void => {
+    this.animFrameId = requestAnimationFrame(this.loop);
+    const now = performance.now();
+    const dt = Math.min((now - this.lastTime) / 1000, 0.1);
+    this.lastTime = now;
+    const snap = this.input.poll();
+
+    if (this.input.isMobileDevice) {
+      const joy = this.joystick.getState();
+      const acts = this.actionButtons.getState();
+      this.input.setMobileInput({ moveX: joy.x, moveY: joy.y, shoot: acts.shoot, jump: acts.jump, reload: acts.reload });
+    }
+
+    if (snap.pause && this.state.isPlaying) {
+      this.state.transition('PAUSED');
+      this.pauseScreen.show(); this.input.unlockPointer();
+      return;
+    }
+    if (!this.state.isPlaying) return;
+
+    if (snap.weaponSwitch !== 0) this.player = this.weapons.switchWeapon(this.player, snap.weaponSwitch);
+    if (snap.reload) this.weapons.tryReload(this.player);
+    this.player = this.physics.updatePlayer(this.player, snap, dt);
+
+    if (snap.shoot) {
+      const fr = this.weapons.tryFire(this.player, now / 1000);
+      if (fr) { this.weaponRenderer.showMuzzleFlash(); this.doShoot(fr.damage, fr.spread, fr.range, fr.pellets); }
+    } else { this.weapons.release(this.player); }
+
+    this.weapons.tickReloads(dt);
+    this.updateEnemies(dt, now);
+    const tickRes = this.combat.tickInvincibility(this.player, this.enemies, dt);
+    this.player = tickRes.player; this.enemies = tickRes.enemies;
+    this.player = tickPowerUps(this.player, dt);
+    this.player = tickInvincibility(this.player, dt);
+
+    const spawnRes = this.spawner.trySpawnEnemy(this.wave, this.enemies.filter(isEnemyAlive), { x: this.player.position.x, z: this.player.position.z });
+    this.wave = spawnRes.wave;
+    if (spawnRes.enemy) { this.enemies.push(spawnRes.enemy); this.enemyRenderer.createMesh(spawnRes.enemy); }
+
+    this.wave = tickWave(this.wave, dt, this.enemies.filter(isEnemyAlive).length);
+    if (this.wave.phase === 'spawning' && this.wave.enemiesSpawned === 0 && this.wave.spawnTimer <= 0) {
+      this.bus.emit('waveStarted', { wave: this.wave.waveNumber, enemiesRemaining: this.wave.totalEnemiesThisWave });
+    }
+    this.score = tickCombo(this.score, now / 1000);
+    this.handlePowerUpCollection();
+
+    const camPos = this.renderer.camera.position;
+    for (const e of this.enemies) { if (isEnemyAlive(e)) this.enemyRenderer.sync(e, camPos); }
+    for (const pu of this.powerUps) { if (!pu.collected) this.effects.syncPowerUp(pu, now / 1000); }
+    for (const id of this.enemyRenderer.tickDeathAnimations(now)) { this.enemyRenderer.removeMesh(id); }
+
+    this.weaponRenderer.tick(now);
+    this.effects.tickShake(dt);
+    this.killFeed.tick(now);
+    this.crosshair.setSpread(Math.abs(snap.moveX) + Math.abs(snap.moveY));
+    this.renderer.render();
+  };
+
+  private updateEnemies(dt: number, now: number): void {
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i];
+      if (!isEnemyAlive(e)) continue;
+      const dist = PhysicsSystem.horizontalDistance({ x: e.position.x, z: e.position.z }, { x: this.player.position.x, z: this.player.position.z });
+      let u = e;
+      if (dist <= e.attackRange) {
+        const res = this.combat.processEnemyAttack(e, this.player, now / 1000);
+        u = res.enemy; this.player = res.player;
+      } else if (dist <= e.detectionRange) {
+        u = { ...e, state: 'chasing' };
+      } else { u = { ...e, state: 'idle' }; }
+      this.enemies[i] = this.physics.updateEnemy(u, this.player.position, dt);
+    }
+  }
+
+  private doShoot(_damage: number, spread: number, range: number, pellets: number): void {
+    const cam = this.renderer.camera;
+    const baseDir = new THREE.Vector3(); cam.getWorldDirection(baseDir);
+    const origin = cam.position.clone(); origin.y -= 0.1;
+    for (let p = 0; p < pellets; p++) {
+      const dir = baseDir.clone();
+      if (spread > 0) { dir.x += (Math.random() - 0.5) * THREE.MathUtils.degToRad(spread); dir.y += (Math.random() - 0.5) * THREE.MathUtils.degToRad(spread); dir.normalize(); }
+      const rc = new THREE.Raycaster(cam.position, dir, 0, range);
+      const hits = rc.intersectObjects(this.renderer.scene.children, true);
+      if (hits.length > 0) {
+        const hit = hits[0];
+        this.weaponRenderer.createTrail(origin, hit.point, true);
+        this.weaponRenderer.createImpact(hit.point, hit.face?.normal);
+        let obj: THREE.Object3D | null = hit.object;
+        while (obj) {
+          if (obj.userData.type === 'enemy') {
+            const eid = obj.userData.enemyId as string;
+            const enemy = this.enemies.find(e => e.id === eid);
+            if (enemy && isEnemyAlive(enemy)) {
+              const wp = this.weapons.getCurrentWeapon(this.player)!;
+              const res = this.combat.processHit(wp, enemy, this.player);
+              this.enemies[this.enemies.indexOf(enemy)] = res.enemy;
+              if (res.result.killed) this.enemyRenderer.startDeathAnimation(res.enemy);
+            }
+            break;
+          }
+          obj = obj.parent;
+        }
+      } else {
+        this.weaponRenderer.createTrail(origin, origin.clone().add(dir.clone().multiplyScalar(range)), false);
+      }
+    }
+  }
+
+  private handlePowerUpCollection(): void {
+    const pp = this.player.position;
+    for (let i = 0; i < this.powerUps.length; i++) {
+      const pu = this.powerUps[i];
+      if (pu.collected) continue;
+      if (PhysicsSystem.distance(pp, pu.position) < 1.5) {
+        switch (pu.type) {
+          case 'healthPack': {
+            const c = getPowerUpConfig('healthPack') as { healAmount: number };
+            this.player = this.combat.healPlayer(this.player, c.healAmount);
+            break;
+          }
+          case 'ammoPack': {
+            const c = getPowerUpConfig('ammoPack') as { ammoAmount: number };
+            this.weapons.addAmmo(this.player.currentWeapon, c.ammoAmount);
+            break;
+          }
+          case 'speedBoost': {
+            const c = getPowerUpConfig('speedBoost') as { multiplier: number; duration: number };
+            this.player = addPowerUp(this.player, 'speedBoost', c.multiplier, c.duration);
+            break;
+          }
+          case 'damageBoost': {
+            const c = getPowerUpConfig('damageBoost') as { multiplier: number; duration: number };
+            this.player = addPowerUp(this.player, 'damageBoost', c.multiplier, c.duration);
+            break;
+          }
+        }
+        this.powerUps[i] = { ...pu, collected: true };
+        this.effects.removePowerUpMesh(pu.id);
+        this.bus.emit('powerUpCollected', { id: pu.id, type: pu.type });
+      }
+    }
+    this.powerUps = this.powerUps.filter(p => {
+      const u = tickPowerUpLifetime(p, 0);
+      if (isPowerUpExpired(u)) { this.effects.removePowerUpMesh(p.id); return false; }
+      return true;
+    });
+  }
+
+  dispose(): void {
+    cancelAnimationFrame(this.animFrameId);
+    this.input.detach(); this.bus.clear();
+    this.renderer.dispose(); this.sceneBuilder.dispose(); this.skybox.dispose();
+    this.enemyRenderer.dispose(); this.weaponRenderer.dispose(); this.effects.dispose();
+    this.hud.dispose(); this.crosshair.dispose(); this.startScreen.dispose();
+    this.gameOverScreen.dispose(); this.pauseScreen.dispose(); this.killFeed.dispose();
+    this.joystick.dispose(); this.lookController.dispose(); this.actionButtons.dispose();
   }
 }

@@ -1,18 +1,22 @@
+/**
+ * Gradient skybox using a custom shader.
+ */
+
 import * as THREE from 'three';
 
 export class Skybox {
   private scene: THREE.Scene;
-  private sky: THREE.Mesh;
+  private mesh: THREE.Mesh;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
-    this.sky = this.createGradientSky();
-    this.scene.add(this.sky);
+    this.mesh = this.createSky();
+    this.scene.add(this.mesh);
   }
 
-  private createGradientSky(): THREE.Mesh {
+  private createSky(): THREE.Mesh {
     const geometry = new THREE.SphereGeometry(500, 32, 32);
-    
+
     const material = new THREE.ShaderMaterial({
       uniforms: {
         topColor: { value: new THREE.Color(0x0077ff) },
@@ -20,7 +24,7 @@ export class Skybox {
         offset: { value: 33 },
         exponent: { value: 0.6 },
       },
-      vertexShader: `
+      vertexShader: /* glsl */ `
         varying vec3 vWorldPosition;
         void main() {
           vec4 worldPosition = modelMatrix * vec4(position, 1.0);
@@ -28,7 +32,7 @@ export class Skybox {
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
-      fragmentShader: `
+      fragmentShader: /* glsl */ `
         uniform vec3 topColor;
         uniform vec3 bottomColor;
         uniform float offset;
@@ -40,20 +44,21 @@ export class Skybox {
         }
       `,
       side: THREE.BackSide,
+      depthWrite: false,
     });
 
     return new THREE.Mesh(geometry, material);
   }
 
-  public setColors(topColor: number, bottomColor: number): void {
-    const material = this.sky.material as THREE.ShaderMaterial;
-    material.uniforms.topColor.value.setHex(topColor);
-    material.uniforms.bottomColor.value.setHex(bottomColor);
+  setColors(topColor: number, bottomColor: number): void {
+    const mat = this.mesh.material as THREE.ShaderMaterial;
+    mat.uniforms.topColor.value.setHex(topColor);
+    mat.uniforms.bottomColor.value.setHex(bottomColor);
   }
 
-  public dispose(): void {
-    this.scene.remove(this.sky);
-    this.sky.geometry.dispose();
-    (this.sky.material as THREE.Material).dispose();
+  dispose(): void {
+    this.scene.remove(this.mesh);
+    this.mesh.geometry.dispose();
+    (this.mesh.material as THREE.Material).dispose();
   }
 }
