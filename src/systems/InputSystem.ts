@@ -211,7 +211,7 @@ export class InputSystem {
     snap.reload = this.keyJustPressed.has('reload') || this.mobileReload;
     snap.pause = this.keyJustPressed.has('pause');
 
-    // Mobile jump/reload reset
+    // Reset edge-triggered mobile inputs (sprint is level-triggered, stays as set)
     this.mobileJump = false;
     this.mobileReload = false;
 

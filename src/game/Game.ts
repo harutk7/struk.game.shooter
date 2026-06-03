@@ -226,7 +226,14 @@ export class Game {
     if (this.input.isMobileDevice) {
       const joy = this.joystick.getState();
       const acts = this.actionButtons.getState();
-      this.input.setMobileInput({ moveX: joy.x, moveY: joy.y, shoot: acts.shoot, jump: acts.jump, reload: acts.reload });
+      // Auto-sprint when joystick is pushed beyond 75% of max throw
+      const autoSprint = joy.distance > 0.75;
+      this.input.setMobileInput({
+        moveX: joy.x, moveY: joy.y,
+        shoot: acts.shoot, jump: acts.jump, reload: acts.reload,
+        sprint: autoSprint,
+        weaponSwitch: acts.weaponSwitch,
+      });
     }
 
     const snap = this.input.poll();

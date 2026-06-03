@@ -63,12 +63,14 @@ export class EnemyRenderer {
     const bgGeo = new THREE.PlaneGeometry(1, 0.1);
     const bgMat = new THREE.MeshBasicMaterial({ color: 0x333333, side: THREE.DoubleSide, depthTest: false });
     const bg = new THREE.Mesh(bgGeo, bgMat);
+    (bg as any).raycast = () => {}; // Exclude from weapon raycasts
     hbGroup.add(bg);
 
     const fillGeo = new THREE.PlaneGeometry(0.98, 0.08);
     const fillMat = new THREE.MeshBasicMaterial({ color: 0x44ff44, side: THREE.DoubleSide, depthTest: false });
     const fill = new THREE.Mesh(fillGeo, fillMat);
     fill.position.z = 0.01;
+    (fill as any).raycast = () => {}; // Exclude from weapon raycasts
     hbGroup.add(fill);
 
     this.scene.add(body);

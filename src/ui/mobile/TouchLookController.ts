@@ -10,7 +10,7 @@ export class TouchLookController {
 
   constructor() {
     this.element = document.createElement('div');
-    Object.assign(this.element.style, { position: 'fixed', top: '0', right: '0', width: '50%', height: '70%', zIndex: '1500', touchAction: 'none', display: 'none' });
+    Object.assign(this.element.style, { position: 'fixed', top: '0', right: '0', width: '50%', height: '100%', zIndex: '1500', touchAction: 'none', display: 'none' });
     this.element.addEventListener('touchstart', this.onStart.bind(this), { passive: false });
     this.element.addEventListener('touchmove', this.onMove.bind(this), { passive: false });
     this.element.addEventListener('touchend', this.onEnd.bind(this), { passive: false });
