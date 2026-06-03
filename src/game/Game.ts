@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { EventBus } from '../core/EventBus';
 import type { GameEvents } from '../core/GameEvents';
 import { GameState } from '../core/GameState';
+import { GAME_CONFIG } from '../core/GameConfig';
 import { InputSystem } from '../systems/InputSystem';
 import { PhysicsSystem } from '../systems/PhysicsSystem';
 import { CombatSystem } from '../systems/CombatSystem';
@@ -64,6 +65,8 @@ export class Game {
   private wave: WaveState;
   private animFrameId = 0;
   private lastTime = 0;
+  private cameraYaw = 0;
+  private cameraPitch = 0;
 
   constructor(container: HTMLElement) {
     this.input = new InputSystem();
@@ -216,9 +219,22 @@ export class Game {
     }
     if (!this.state.isPlaying) return;
 
+    // ── Camera rotation (mouse look) ──
+    if (snap.pointerLocked) {
+      this.cameraYaw -= snap.lookX * GAME_CONFIG.camera.mouseSensitivity;
+      this.cameraPitch -= snap.lookY * GAME_CONFIG.camera.mouseSensitivity;
+      this.cameraPitch = Math.max(GAME_CONFIG.camera.minPitch, Math.min(GAME_CONFIG.camera.maxPitch, this.cameraPitch));
+    }
+
     if (snap.weaponSwitch !== 0) this.player = this.weapons.switchWeapon(this.player, snap.weaponSwitch);
     if (snap.reload) this.weapons.tryReload(this.player);
-    this.player = this.physics.updatePlayer(this.player, snap, dt);
+    this.player = this.physics.updatePlayer(this.player, snap, dt, this.cameraYaw);
+
+    // ── Sync camera to player ──
+    const cam = this.renderer.camera;
+    cam.position.set(this.player.position.x, this.player.position.y, this.player.position.z);
+    const euler = new THREE.Euler(this.cameraPitch, this.cameraYaw, 0, 'YXZ');
+    cam.quaternion.setFromEuler(euler);
 
     if (snap.shoot) {
       const fr = this.weapons.tryFire(this.player, now / 1000);

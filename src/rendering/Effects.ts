@@ -14,7 +14,6 @@ export class Effects {
   private shakeIntensity = 0;
   private shakeDuration = 0;
   private shakeTimer = 0;
-  private originalCameraPos = new THREE.Vector3();
 
   // Power-up meshes
   private powerUpMeshes = new Map<string, THREE.Mesh>();
@@ -34,15 +33,11 @@ export class Effects {
     this.shakeIntensity = Math.max(this.shakeIntensity, intensity);
     this.shakeDuration = duration;
     this.shakeTimer = 0;
-    this.originalCameraPos.copy(this.camera.position);
   }
 
   tickShake(dt: number): void {
     if (this.shakeTimer >= this.shakeDuration) {
-      if (this.shakeIntensity > 0) {
-        this.camera.position.copy(this.originalCameraPos);
-        this.shakeIntensity = 0;
-      }
+      this.shakeIntensity = 0;
       return;
     }
 
@@ -50,9 +45,10 @@ export class Effects {
     const progress = this.shakeTimer / this.shakeDuration;
     const currentIntensity = this.shakeIntensity * (1 - progress);
 
-    this.camera.position.x = this.originalCameraPos.x + (Math.random() - 0.5) * currentIntensity * 2;
-    this.camera.position.y = this.originalCameraPos.y + (Math.random() - 0.5) * currentIntensity * 2;
-    this.camera.position.z = this.originalCameraPos.z + (Math.random() - 0.5) * currentIntensity * 0.5;
+    // Apply offset on top of current camera position (game loop sets base position)
+    this.camera.position.x += (Math.random() - 0.5) * currentIntensity * 2;
+    this.camera.position.y += (Math.random() - 0.5) * currentIntensity * 2;
+    this.camera.position.z += (Math.random() - 0.5) * currentIntensity * 0.5;
   }
 
   /* ── Damage flash ── */

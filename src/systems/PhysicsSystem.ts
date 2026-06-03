@@ -28,21 +28,28 @@ export class PhysicsSystem {
     this.colliders = colliders;
   }
 
-  /** Update player physics. Returns the new player state. */
-  updatePlayer(player: PlayerState, input: InputSnapshot, dt: number): PlayerState {
+  /** Update player physics. cameraYaw is the camera's yaw angle for camera-relative movement. */
+  updatePlayer(player: PlayerState, input: InputSnapshot, dt: number, cameraYaw: number): PlayerState {
     if (!player.isAlive) return player;
 
     let pos = { ...player.position };
     let vel = { ...player.velocity };
     let grounded = player.isGrounded;
 
-    // ── Horizontal movement ──
+    // ── Horizontal movement (camera-relative) ──
     const speedMult = getSpeedMultiplier(player);
     const baseSpeed = GAME_CONFIG.player.moveSpeed * speedMult;
     const speed = input.sprint ? baseSpeed * GAME_CONFIG.player.sprintMultiplier : baseSpeed;
 
-    const moveX = input.moveX * speed * dt;
-    const moveZ = input.moveY * speed * dt;
+    // Rotate input by camera yaw so W = forward relative to camera
+    // Three.js: at yaw=0, camera looks down -Z; at yaw=PI/2, camera looks down +X
+    const sinY = Math.sin(cameraYaw);
+    const cosY = Math.cos(cameraYaw);
+    const worldX = input.moveX * cosY + input.moveY * sinY;
+    const worldZ = input.moveX * sinY - input.moveY * cosY;
+
+    const moveX = worldX * speed * dt;
+    const moveZ = worldZ * speed * dt;
 
     // Try X movement
     const newX = pos.x + moveX;

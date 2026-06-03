@@ -44,13 +44,14 @@ export function createPlayer(): PlayerState {
 export function damagePlayer(player: PlayerState, amount: number): PlayerState {
   if (!player.isAlive || player.isInvincible) return player;
 
-  const newHealth = Math.max(0, player.health - amount);
+  const clampedAmount = Math.max(0, amount);
+  const newHealth = Math.max(0, player.health - clampedAmount);
   return {
     ...player,
     health: newHealth,
     isAlive: newHealth > 0,
-    isInvincible: newHealth > 0,
-    invincibilityTimer: newHealth > 0 ? GAME_CONFIG.player.invincibilityDuration : 0,
+    isInvincible: clampedAmount > 0 && newHealth > 0,
+    invincibilityTimer: clampedAmount > 0 && newHealth > 0 ? GAME_CONFIG.player.invincibilityDuration : 0,
   };
 }
 
@@ -64,7 +65,7 @@ export function healPlayer(player: PlayerState, amount: number): PlayerState {
 
 export function tickInvincibility(player: PlayerState, dt: number): PlayerState {
   if (!player.isInvincible) return player;
-  const newTimer = player.invincibilityTimer - dt;
+  const newTimer = Math.max(0, player.invincibilityTimer - dt);
   return {
     ...player,
     invincibilityTimer: newTimer,
@@ -82,6 +83,7 @@ export function addWeapon(player: PlayerState, weapon: WeaponType): PlayerState 
 
 export function switchWeapon(player: PlayerState, weapon: WeaponType): PlayerState {
   if (!player.ownedWeapons.includes(weapon)) return player;
+  if (player.currentWeapon === weapon) return player;
   return { ...player, currentWeapon: weapon };
 }
 
@@ -104,7 +106,6 @@ export function tickPowerUps(player: PlayerState, dt: number): PlayerState {
     .map(p => ({ ...p, remainingTime: p.remainingTime - dt }))
     .filter(p => p.remainingTime > 0);
 
-  if (updated.length === player.activePowerUps.length) return player;
   return { ...player, activePowerUps: updated };
 }
 
