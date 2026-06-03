@@ -30,7 +30,7 @@ export const GAME_CONFIG = {
     near: 0.1,
     far: 500,
     mouseSensitivity: 0.002,
-    mobileLookSensitivity: 0.3,
+    mobileLookSensitivity: 0.005,
     minPitch: -Math.PI / 2 + 0.01,
     maxPitch: Math.PI / 2 - 0.01,
   },

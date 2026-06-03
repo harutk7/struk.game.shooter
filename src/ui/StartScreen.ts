@@ -22,7 +22,8 @@ export class StartScreen {
     Object.assign(sub.style, { color: '#ff6600', fontSize: 'clamp(18px, 3vw, 28px)', fontWeight: '300', letterSpacing: '12px', marginBottom: '40px' });
     this.element.appendChild(sub);
     const cta = document.createElement('p');
-    cta.textContent = 'CLICK TO PLAY';
+    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    cta.textContent = isTouchDevice ? 'TAP TO PLAY' : 'CLICK TO PLAY';
     Object.assign(cta.style, { color: '#aaa', fontSize: '18px', letterSpacing: '3px', animation: 'strukPulse 2s ease-in-out infinite' });
     this.element.appendChild(cta);
     const ctrl = document.createElement('p');

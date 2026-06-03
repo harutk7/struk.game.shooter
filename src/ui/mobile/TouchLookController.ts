@@ -4,7 +4,7 @@ export class TouchLookController {
   private element: HTMLDivElement;
   private touchId: number | null = null;
   private lastX = 0; private lastY = 0;
-  private sensitivity = 0.3;
+  private sensitivity = 1;
   private state: LookState = { deltaX: 0, deltaY: 0, active: false };
   public onLook: ((dx: number, dy: number) => void) | null = null;
 

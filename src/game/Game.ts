@@ -32,6 +32,7 @@ import { tickPowerUpLifetime, isPowerUpExpired, getPowerUpConfig } from '../mode
 import type { ScoreState } from '../models/ScoreManager';
 import { createScoreState, addKill, tickCombo } from '../models/ScoreManager';
 import type { WaveState } from '../models/WaveManager';
+import type { WavePhase } from '../models/WaveManager';
 import { createWaveState, tickWave, registerKill } from '../models/WaveManager';
 import { getWeaponConfig } from '../models/Weapon';
 
@@ -67,6 +68,9 @@ export class Game {
   private lastTime = 0;
   private cameraYaw = 0;
   private cameraPitch = 0;
+  // Track wave transitions so events are emitted exactly once
+  private prevWavePhase: WavePhase = 'spawning';
+  private prevWaveNumber = 1;
 
   constructor(container: HTMLElement) {
     this.input = new InputSystem();
@@ -137,7 +141,7 @@ export class Game {
     });
     this.bus.on('enemyDamaged', (d) => this.enemyRenderer.flashDamage(d.id));
     this.bus.on('waveStarted', (d) => this.hud.updateWave(d.wave));
-    this.bus.on('waveCompleted', (d) => this.hud.updateWave(d.wave + 1));
+    this.bus.on('waveCompleted', () => { /* wave break — future: show countdown */ });
     this.bus.on('powerUpSpawned', (d) => {
       const pu = this.powerUps.find(p => p.id === d.id);
       if (pu) this.effects.createPowerUpMesh(pu);
@@ -160,6 +164,9 @@ export class Game {
     if (this.input.isMobileDevice) {
       this.joystick.show(); this.lookController.show(); this.actionButtons.show();
     }
+    this.prevWavePhase = 'spawning';
+    this.prevWaveNumber = 1;
+    cancelAnimationFrame(this.animFrameId);
     this.lastTime = performance.now();
     this.loop();
   }
@@ -172,12 +179,16 @@ export class Game {
     if (this.input.isMobileDevice) {
       this.joystick.hide(); this.lookController.hide(); this.actionButtons.hide();
     }
+    // RAF is at end of loop — loop stops naturally next tick when isPlaying=false
   }
 
   private restartGame(): void {
+    cancelAnimationFrame(this.animFrameId);
+    this.state._forceSet('MENU');
     this.player = createPlayer();
     this.enemies = []; this.powerUps = [];
     this.score = createScoreState(); this.wave = createWaveState();
+    this.prevWavePhase = 'spawning'; this.prevWaveNumber = 1;
     this.enemyRenderer.clear(); this.effects.clearPowerUps(); this.weapons.reset();
     this.gameOverScreen.hide();
     this.startGame();
@@ -186,43 +197,56 @@ export class Game {
   private resumeGame(): void {
     this.state.transition('PLAYING');
     this.pauseScreen.hide(); this.input.lockPointer();
-    this.lastTime = performance.now(); this.loop();
+    cancelAnimationFrame(this.animFrameId);
+    this.lastTime = performance.now();
+    this.loop();
   }
 
   private quitToMenu(): void {
+    cancelAnimationFrame(this.animFrameId);
     this.state.transition('MENU');
     this.pauseScreen.hide(); this.input.unlockPointer();
     this.crosshair.hide(); this.hud.hide(); this.startScreen.show();
     this.player = createPlayer();
     this.enemies = []; this.powerUps = [];
     this.score = createScoreState(); this.wave = createWaveState();
+    this.prevWavePhase = 'spawning'; this.prevWaveNumber = 1;
     this.enemyRenderer.clear(); this.effects.clearPowerUps(); this.weapons.reset();
+    if (this.input.isMobileDevice) {
+      this.joystick.hide(); this.lookController.hide(); this.actionButtons.hide();
+    }
   }
 
   private loop = (): void => {
-    this.animFrameId = requestAnimationFrame(this.loop);
     const now = performance.now();
     const dt = Math.min((now - this.lastTime) / 1000, 0.1);
     this.lastTime = now;
-    const snap = this.input.poll();
 
+    // Feed mobile controls into InputSystem BEFORE poll() so they appear in this frame's snapshot
     if (this.input.isMobileDevice) {
       const joy = this.joystick.getState();
       const acts = this.actionButtons.getState();
       this.input.setMobileInput({ moveX: joy.x, moveY: joy.y, shoot: acts.shoot, jump: acts.jump, reload: acts.reload });
     }
 
-    if (snap.pause && this.state.isPlaying) {
+    const snap = this.input.poll();
+
+    // Check mobile pause (edge-triggered via consumePause) and keyboard pause
+    const mobilePause = this.input.isMobileDevice && this.actionButtons.consumePause();
+    if ((snap.pause || mobilePause) && this.state.isPlaying) {
       this.state.transition('PAUSED');
       this.pauseScreen.show(); this.input.unlockPointer();
-      return;
+      return; // RAF not scheduled — loop stops until resumeGame() calls this.loop()
     }
     if (!this.state.isPlaying) return;
 
-    // ── Camera rotation (mouse look) ──
+    // ── Camera rotation — separate sensitivity for mobile vs desktop ──
+    const sensitivity = this.input.isMobileDevice
+      ? GAME_CONFIG.camera.mobileLookSensitivity
+      : GAME_CONFIG.camera.mouseSensitivity;
     if (snap.pointerLocked) {
-      this.cameraYaw -= snap.lookX * GAME_CONFIG.camera.mouseSensitivity;
-      this.cameraPitch -= snap.lookY * GAME_CONFIG.camera.mouseSensitivity;
+      this.cameraYaw -= snap.lookX * sensitivity;
+      this.cameraPitch -= snap.lookY * sensitivity;
       this.cameraPitch = Math.max(GAME_CONFIG.camera.minPitch, Math.min(GAME_CONFIG.camera.maxPitch, this.cameraPitch));
     }
 
@@ -253,11 +277,21 @@ export class Game {
     if (spawnRes.enemy) { this.enemies.push(spawnRes.enemy); this.enemyRenderer.createMesh(spawnRes.enemy); }
 
     this.wave = tickWave(this.wave, dt, this.enemies.filter(isEnemyAlive).length);
-    if (this.wave.phase === 'spawning' && this.wave.enemiesSpawned === 0 && this.wave.spawnTimer <= 0) {
+
+    // Emit wave transition events exactly once per transition
+    if (this.wave.phase !== this.prevWavePhase) {
+      if (this.wave.phase === 'break' && this.prevWavePhase === 'fighting') {
+        this.bus.emit('waveCompleted', { wave: this.wave.waveNumber });
+      }
+      this.prevWavePhase = this.wave.phase;
+    }
+    if (this.wave.waveNumber !== this.prevWaveNumber) {
+      this.prevWaveNumber = this.wave.waveNumber;
       this.bus.emit('waveStarted', { wave: this.wave.waveNumber, enemiesRemaining: this.wave.totalEnemiesThisWave });
     }
+
     this.score = tickCombo(this.score, now / 1000);
-    this.handlePowerUpCollection();
+    this.handlePowerUpCollection(dt);
 
     const camPos = this.renderer.camera.position;
     for (const e of this.enemies) { if (isEnemyAlive(e)) this.enemyRenderer.sync(e, camPos); }
@@ -269,6 +303,9 @@ export class Game {
     this.killFeed.tick(now);
     this.crosshair.setSpread(Math.abs(snap.moveX) + Math.abs(snap.moveY));
     this.renderer.render();
+
+    // Only schedule next frame while actively playing
+    this.animFrameId = requestAnimationFrame(this.loop);
   };
 
   private updateEnemies(dt: number, now: number): void {
@@ -321,7 +358,7 @@ export class Game {
     }
   }
 
-  private handlePowerUpCollection(): void {
+  private handlePowerUpCollection(dt: number): void {
     const pp = this.player.position;
     for (let i = 0; i < this.powerUps.length; i++) {
       const pu = this.powerUps[i];
@@ -354,11 +391,13 @@ export class Game {
         this.bus.emit('powerUpCollected', { id: pu.id, type: pu.type });
       }
     }
-    this.powerUps = this.powerUps.filter(p => {
-      const u = tickPowerUpLifetime(p, 0);
-      if (isPowerUpExpired(u)) { this.effects.removePowerUpMesh(p.id); return false; }
-      return true;
-    });
+    // Tick lifetime with actual dt, then remove expired/collected entries
+    this.powerUps = this.powerUps
+      .map(p => p.collected ? p : tickPowerUpLifetime(p, dt))
+      .filter(p => {
+        if (isPowerUpExpired(p)) { this.effects.removePowerUpMesh(p.id); return false; }
+        return true;
+      });
   }
 
   dispose(): void {

@@ -103,7 +103,7 @@ export class PhysicsSystem {
     targetPos: { x: number; y: number; z: number },
     dt: number,
   ): EnemyData {
-    if (enemy.state === 'dead') return enemy;
+    if (enemy.state === 'dead' || enemy.state === 'idle') return enemy;
 
     const dx = targetPos.x - enemy.position.x;
     const dz = targetPos.z - enemy.position.z;

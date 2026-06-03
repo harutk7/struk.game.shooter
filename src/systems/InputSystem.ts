@@ -79,6 +79,7 @@ export class InputSystem {
   private mobileShoot = false;
   private mobileJump = false;
   private mobileReload = false;
+  private mobileSprint = false;
   private mobileLookX = 0;
   private mobileLookY = 0;
   private isMobile = false;
@@ -165,14 +166,17 @@ export class InputSystem {
     moveX?: number; moveY?: number;
     shoot?: boolean; jump?: boolean; reload?: boolean;
     lookX?: number; lookY?: number;
+    sprint?: boolean; weaponSwitch?: number;
   }): void {
     if (data.moveX !== undefined) this.mobileMoveX = data.moveX;
     if (data.moveY !== undefined) this.mobileMoveY = data.moveY;
     if (data.shoot !== undefined) this.mobileShoot = data.shoot;
     if (data.jump !== undefined) this.mobileJump = data.jump;
     if (data.reload !== undefined) this.mobileReload = data.reload;
-    if (data.lookX !== undefined) this.mobileLookX = data.lookX;
-    if (data.lookY !== undefined) this.mobileLookY = data.lookY;
+    if (data.sprint !== undefined) this.mobileSprint = data.sprint;
+    if (data.lookX !== undefined) this.mobileLookX += data.lookX;
+    if (data.lookY !== undefined) this.mobileLookY += data.lookY;
+    if (data.weaponSwitch !== undefined && data.weaponSwitch !== 0) this.weaponSwitchDir = data.weaponSwitch;
   }
 
   /** Poll the current input snapshot. Call once per frame. */
@@ -198,7 +202,7 @@ export class InputSystem {
       snap.moveY /= len;
     }
 
-    snap.sprint = this.keyState.get('sprint') ?? false;
+    snap.sprint = (this.keyState.get('sprint') ?? false) || this.mobileSprint;
     snap.shoot = this.mouseButton0 || this.mobileShoot;
     snap.pointerLocked = this.pointerLocked;
 

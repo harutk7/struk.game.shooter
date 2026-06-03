@@ -169,7 +169,7 @@ describe('PhysicsSystem', () => {
   /* ── Enemy movement ── */
   it('enemy moves toward target', () => {
     const phys = new PhysicsSystem();
-    const enemy = createEnemy('GRUNT', { x: 0, y: 0, z: 0 });
+    const enemy = { ...createEnemy('GRUNT', { x: 0, y: 0, z: 0 }), state: 'chasing' as const };
     const target = { x: 10, y: 0, z: 0 };
     const moved = phys.updateEnemy(enemy, target, 1);
     expect(moved.position.x).toBeGreaterThan(0);
