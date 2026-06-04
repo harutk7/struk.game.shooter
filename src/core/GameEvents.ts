@@ -28,6 +28,8 @@ export interface GameEvents {
   weaponSwitched: { from: WeaponType | null; to: WeaponType };
   ammoChanged: { weaponType: WeaponType; ammo: number; reserve: number };
   ammoDepleted: { weaponType: WeaponType };
+  /** Trigger pulled on an empty magazine (no fire, no ammo change). */
+  weaponEmptyClick: { weaponType: WeaponType };
 
   /* ── Enemies ── */
   enemySpawned: { id: string; type: EnemyType; position: { x: number; y: number; z: number } };
@@ -50,6 +52,14 @@ export interface GameEvents {
   powerUpSpawned: { id: string; type: PowerUpType; position: { x: number; y: number; z: number } };
   powerUpCollected: { id: string; type: PowerUpType };
   powerUpExpired: { type: PowerUpType };
+
+  /* ── Bots (AI opponents — added in realistic-shooter-overhaul) ── */
+  botSpawned: { id: string; name: string; color: number; difficulty: string; position: { x: number; z: number } };
+  botDamaged: { id: string; amount: number; health: number; maxHealth: number };
+  botKilled: { id: string; name: string; killerId: string | null; weaponType: WeaponType; position: { x: number; z: number } };
+  botRespawned: { id: string; name: string; position: { x: number; z: number } };
+  /** Gunshot heard (bots use this to investigate). */
+  gunshotHeard: { position: { x: number; z: number }; shooterId: string | null };
 
   /* ── Effects (rendering-only) ── */
   screenShake: { intensity: number; duration: number };

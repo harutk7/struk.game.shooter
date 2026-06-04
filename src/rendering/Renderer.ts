@@ -27,6 +27,10 @@ export class Renderer {
       GAME_CONFIG.camera.near,
       GAME_CONFIG.camera.far,
     );
+    // Camera must be a child of the scene so we can parent the FPV body
+    // (head, arms, weapon rig) directly to it. The camera position/quaternion
+    // is still authoritative; being in the scene graph has no visual effect.
+    this.scene.add(this.camera);
 
     this.threeRenderer = new THREE.WebGLRenderer({
       antialias: GAME_CONFIG.rendering.antialias,

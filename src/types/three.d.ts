@@ -13,6 +13,7 @@ declare module 'three' {
     multiplyScalar(s: number): this;
     normalize(): this;
     distanceTo(v: Vector3): number;
+    dot(v: Vector3): number;
     applyQuaternion(q: Quaternion): Vector3;
     length(): number;
     setScalar(s: number): this;
@@ -76,6 +77,8 @@ declare module 'three' {
     remove(...objects: Object3D[]): this;
     lookAt(x: number | Vector3, y?: number, z?: number): void;
     getWorldDirection(dir: Vector3): Vector3;
+    traverse(callback: (object: Object3D) => void): void;
+    getObjectByName(name: string): Object3D | undefined;
   }
 
   export class Camera extends Object3D {
@@ -154,6 +157,8 @@ declare module 'three' {
     metalness: number;
     emissive: Color;
     emissiveIntensity: number;
+    map: Texture | null;
+    needsUpdate: boolean;
     constructor(params?: Record<string, any>);
   }
 
@@ -239,6 +244,12 @@ declare module 'three' {
 
   export class Texture {
     constructor(canvas?: HTMLCanvasElement);
+    dispose(): void;
+    wrapS: number;
+    wrapT: number;
+    repeat: { x: number; y: number; set(x: number, y: number): void };
+    magFilter: number;
+    minFilter: number;
   }
 
   export class CanvasTexture extends Texture {
@@ -258,4 +269,7 @@ declare module 'three' {
   export const PCFSoftShadowMap: number;
   export const SRGBColorSpace: string;
   export const ACESFilmicToneMapping: number;
+  export const RepeatWrapping: number;
+  export const NearestFilter: number;
+  export const LinearFilter: number;
 }

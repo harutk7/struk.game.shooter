@@ -1,8 +1,11 @@
 export class StartScreen {
   private element: HTMLDivElement;
   private onClick: (() => void) | null = null;
+  private onDeathmatchClick: (() => void) | null = null;
   private boundClick: (() => void) | null = null;
   private boundTouch: ((e: TouchEvent) => void) | null = null;
+  private dmBound: (() => void) | null = null;
+  private dmButton: HTMLButtonElement | null = null;
 
   constructor() {
     this.element = document.createElement('div');
@@ -46,23 +49,72 @@ export class StartScreen {
       ctrl.innerHTML =
         'Left Joystick Move &bull; Right Drag Look' +
         '<br>🔫 Shoot &bull; ⬆ Jump &bull; ↻ Reload &bull; ⇄ Cycle Weapon &bull; ⏸ Pause' +
-        '<br>3 Weapons: Pistol &bull; Assault Rifle &bull; Shotgun';
+        '<br>4 Weapons: Pistol &bull; Rifle &bull; Shotgun &bull; Sniper';
     } else {
       ctrl.innerHTML =
         'WASD Move &bull; Mouse Look &bull; Click Shoot &bull; R Reload' +
-        '<br>Space Jump &bull; Shift Sprint &bull; 1/2/3 or Scroll Switch Weapon &bull; Esc Pause' +
-        '<br>3 Weapons: 1=Pistol &bull; 2=Assault Rifle &bull; 3=Shotgun';
+        '<br>Space Jump &bull; Shift Sprint &bull; Ctrl/C Crouch &bull; 1-4 or Scroll Switch' +
+        '<br>4 Weapons: 1=Pistol &bull; 2=Rifle &bull; 3=Shotgun &bull; 4=Sniper';
     }
     Object.assign(ctrl.style, {
-      color: '#555', fontSize: 'clamp(11px, 1.8vw, 13px)', marginTop: '50px',
+      color: '#555', fontSize: 'clamp(11px, 1.8vw, 13px)', marginTop: '40px',
       textAlign: 'center', maxWidth: '480px', lineHeight: '1.8',
     });
     this.element.appendChild(ctrl);
+
+    // ── Mode buttons (added in T4) ──
+    const buttonRow = document.createElement('div');
+    Object.assign(buttonRow.style, {
+      display: 'flex', gap: '20px', marginTop: '30px', flexWrap: 'wrap',
+      justifyContent: 'center',
+    });
+    this.element.appendChild(buttonRow);
+
+    const wavesBtn = document.createElement('button');
+    wavesBtn.textContent = 'WAVES (Classic)';
+    Object.assign(wavesBtn.style, this.buttonStyle('#888'));
+    wavesBtn.addEventListener('click', (e) => { e.stopPropagation(); this.onClick?.(); });
+    buttonRow.appendChild(wavesBtn);
+
+    const dmBtn = document.createElement('button');
+    dmBtn.textContent = 'DEATHMATCH vs BOTS';
+    Object.assign(dmBtn.style, this.buttonStyle('#ff6600'));
+    this.dmBound = (e?: Event) => { e?.stopPropagation(); this.onDeathmatchClick?.(); };
+    dmBtn.addEventListener('click', this.dmBound);
+    this.dmButton = dmBtn;
+    buttonRow.appendChild(dmBtn);
 
     const style = document.createElement('style');
     style.textContent =
       '@keyframes strukPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.4;transform:scale(1.05)}}';
     document.head.appendChild(style);
+  }
+
+  private buttonStyle(color: string): Partial<CSSStyleDeclaration> {
+    return {
+      color: '#fff',
+      background: `linear-gradient(180deg, ${color} 0%, ${this.shade(color, -0.4)} 100%)`,
+      border: `1px solid ${this.shade(color, -0.2)}`,
+      padding: '14px 28px',
+      fontSize: 'clamp(13px, 2.2vw, 16px)',
+      fontWeight: '700',
+      letterSpacing: '2px',
+      borderRadius: '4px',
+      cursor: 'pointer',
+      fontFamily: "'Segoe UI', Arial, sans-serif",
+      textTransform: 'uppercase',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+      transition: 'transform 0.1s, box-shadow 0.1s',
+    };
+  }
+
+  private shade(hex: string, amt: number): string {
+    const n = parseInt(hex.replace('#', ''), 16);
+    let r = (n >> 16) & 0xff, g = (n >> 8) & 0xff, b = n & 0xff;
+    r = Math.max(0, Math.min(255, Math.floor(r + (amt < 0 ? r * amt : (255 - r) * amt))));
+    g = Math.max(0, Math.min(255, Math.floor(g + (amt < 0 ? g * amt : (255 - g) * amt))));
+    b = Math.max(0, Math.min(255, Math.floor(b + (amt < 0 ? b * amt : (255 - b) * amt))));
+    return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
   }
 
   setOnClick(cb: () => void): void {
@@ -71,6 +123,17 @@ export class StartScreen {
     this.boundTouch = (e: TouchEvent) => { e.preventDefault(); this.onClick?.(); };
     this.element.addEventListener('click', this.boundClick);
     this.element.addEventListener('touchstart', this.boundTouch, { passive: false });
+  }
+
+  /** Set the click handler for the "DEATHMATCH" button. */
+  setOnDeathmatchClick(cb: () => void): void {
+    this.onDeathmatchClick = cb;
+    // (re-)bind in case the button was added before this is called
+    if (this.dmButton && this.dmBound) {
+      this.dmButton.removeEventListener('click', this.dmBound);
+    }
+    this.dmBound = (e?: Event) => { e?.stopPropagation(); this.onDeathmatchClick?.(); };
+    this.dmButton?.addEventListener('click', this.dmBound);
   }
 
   show(): void {
@@ -83,6 +146,7 @@ export class StartScreen {
   dispose(): void {
     if (this.boundClick) this.element.removeEventListener('click', this.boundClick);
     if (this.boundTouch) this.element.removeEventListener('touchstart', this.boundTouch);
+    if (this.dmButton && this.dmBound) this.dmButton.removeEventListener('click', this.dmBound);
     if (document.body.contains(this.element)) document.body.removeChild(this.element);
   }
 }

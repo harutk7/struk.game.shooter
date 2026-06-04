@@ -9,6 +9,9 @@ export interface InputSnapshot {
   moveY: number;
   /** Whether sprint is held */
   sprint: boolean;
+  /** Whether crouch is held (added in realistic-shooter-overhaul).
+   *  Optional for backward-compat with existing test fixtures. */
+  crouch?: boolean;
   /** Whether jump was pressed this frame */
   jump: boolean;
   /** Whether shoot is held */
@@ -45,7 +48,7 @@ export function createEmptySnapshot(): InputSnapshot {
 
 type KeyAction =
   | 'forward' | 'backward' | 'left' | 'right'
-  | 'jump' | 'sprint' | 'reload' | 'pause';
+  | 'jump' | 'sprint' | 'crouch' | 'reload' | 'pause';
 
 const DEFAULT_KEY_BINDINGS: Record<string, KeyAction> = {
   'KeyW': 'forward',
@@ -59,6 +62,9 @@ const DEFAULT_KEY_BINDINGS: Record<string, KeyAction> = {
   'Space': 'jump',
   'ShiftLeft': 'sprint',
   'ShiftRight': 'sprint',
+  'ControlLeft': 'crouch',
+  'ControlRight': 'crouch',
+  'KeyC': 'crouch',
   'KeyR': 'reload',
   'Escape': 'pause',
   'KeyP': 'pause',
@@ -84,6 +90,7 @@ export class InputSystem {
   private mobileJump = false;
   private mobileReload = false;
   private mobileSprint = false;
+  private mobileCrouch = false;
   private mobileLookX = 0;
   private mobileLookY = 0;
   private isMobile = false;
@@ -170,7 +177,8 @@ export class InputSystem {
     moveX?: number; moveY?: number;
     shoot?: boolean; jump?: boolean; reload?: boolean;
     lookX?: number; lookY?: number;
-    sprint?: boolean; weaponSwitch?: number;
+    sprint?: boolean; crouch?: boolean;
+    weaponSwitch?: number;
   }): void {
     if (data.moveX !== undefined) this.mobileMoveX = data.moveX;
     if (data.moveY !== undefined) this.mobileMoveY = data.moveY;
@@ -178,6 +186,7 @@ export class InputSystem {
     if (data.jump !== undefined) this.mobileJump = data.jump;
     if (data.reload !== undefined) this.mobileReload = data.reload;
     if (data.sprint !== undefined) this.mobileSprint = data.sprint;
+    if (data.crouch !== undefined) this.mobileCrouch = data.crouch;
     if (data.lookX !== undefined) this.mobileLookX += data.lookX;
     if (data.lookY !== undefined) this.mobileLookY += data.lookY;
     if (data.weaponSwitch !== undefined && data.weaponSwitch !== 0) this.weaponSwitchDir = data.weaponSwitch;
@@ -207,6 +216,7 @@ export class InputSystem {
     }
 
     snap.sprint = (this.keyState.get('sprint') ?? false) || this.mobileSprint;
+    snap.crouch = (this.keyState.get('crouch') ?? false) || this.mobileCrouch;
     snap.shoot = this.mouseButton0 || this.mobileShoot;
     snap.pointerLocked = this.pointerLocked;
 
