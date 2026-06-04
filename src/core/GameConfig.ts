@@ -67,6 +67,16 @@ export const GAME_CONFIG = {
     switchDropDistance: 0.25,
   },
 
+  /** Deathmatch match config (added in T4). */
+  match: {
+    /** First to this many kills wins. 0 = timer-only. */
+    scoreLimit: 20,
+    /** Time limit in seconds. */
+    timeLimit: 300, // 5 minutes
+    /** Seconds to count up the post-match scoreboard. */
+    postMatchDelay: 4,
+  },
+
   /** Bot (AI opponent) tuning (added in realistic-shooter-overhaul). */
   bots: {
     /** Number of bots to spawn in a deathmatch. */
@@ -151,8 +161,7 @@ export const GAME_CONFIG = {
       automatic: false,
       pellets: 8,
       reserveAmmo: 32,
-    },
-    // Added in realistic-shooter-overhaul (CS 1.6-style bolt-action)
+    },    // Added in realistic-shooter-overhaul (CS 1.6-style bolt-action)
     SNIPER: {
       name: 'Sniper Rifle',
       damage: 90,

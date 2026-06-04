@@ -22,6 +22,7 @@ import { StartScreen } from '../ui/StartScreen';
 import { GameOverScreen } from '../ui/GameOverScreen';
 import { PauseScreen } from '../ui/PauseScreen';
 import { KillFeed } from '../ui/KillFeed';
+import { MatchHUD } from '../ui/MatchHUD';
 import { VirtualJoystick } from '../ui/mobile/VirtualJoystick';
 import { TouchLookController } from '../ui/mobile/TouchLookController';
 import { TouchActionButtons } from '../ui/mobile/TouchActionButtons';
@@ -35,6 +36,8 @@ import { tickBot, type BotWorldSnapshot } from '../systems/BotAI';
 import type { AABBCollider } from '../systems/PhysicsSystem';
 import type { PowerUpData } from '../models/PowerUp';
 import { tickPowerUpLifetime, isPowerUpExpired, getPowerUpConfig } from '../models/PowerUp';
+import type { MatchState } from '../models/MatchManager';
+import { createMatchState, tickMatch, registerKillEvent } from '../models/MatchManager';
 import type { ScoreState } from '../models/ScoreManager';
 import { createScoreState, addKill, tickCombo } from '../models/ScoreManager';
 import type { WaveState } from '../models/WaveManager';
@@ -64,6 +67,7 @@ export class Game {
   private gameOverScreen: GameOverScreen;
   private pauseScreen: PauseScreen;
   private killFeed: KillFeed;
+  private matchHUD: MatchHUD;
   private joystick: VirtualJoystick;
   private lookController: TouchLookController;
   private actionButtons: TouchActionButtons;
@@ -72,6 +76,7 @@ export class Game {
   private bots: BotData[] = [];
   private obstacles: AABBCollider[] = [];
   private matchActive = false;
+  private match: MatchState | null = null;
   private lastGunshotAt: { x: number; z: number; t: number } | null = null;
   private powerUps: PowerUpData[] = [];
   private score: ScoreState;
@@ -104,6 +109,8 @@ export class Game {
     this.gameOverScreen = new GameOverScreen();
     this.pauseScreen = new PauseScreen();
     this.killFeed = new KillFeed();
+    this.matchHUD = new MatchHUD();
+    this.matchHUD.hide(); // hidden by default (wave mode)
     this.joystick = new VirtualJoystick('left');
     this.lookController = new TouchLookController();
     this.actionButtons = new TouchActionButtons();
@@ -133,6 +140,7 @@ export class Game {
 
     this.wireEvents();
     this.startScreen.setOnClick(() => this.startGame());
+    this.startScreen.setOnDeathmatchClick(() => this.startDeathmatch());
     this.gameOverScreen.setOnRestart(() => this.restartGame());
     this.pauseScreen.setOnResume(() => this.resumeGame());
     this.pauseScreen.setOnQuit(() => this.quitToMenu());
@@ -201,6 +209,18 @@ export class Game {
     this.bus.on('powerUpSpawned', (d) => {
       const pu = this.powerUps.find(p => p.id === d.id);
       if (pu) this.effects.createPowerUpMesh(pu);
+    });
+
+    // ── Deathmatch event wiring (T4) ──
+    this.bus.on('botKilled', (d) => {
+      if (!this.match) return;
+      // d.killerId may be 'player' (player killed this bot) or a bot id
+      const killerIsPlayer = d.killerId === 'player';
+      const victimIsPlayer = d.id === 'player';
+      this.match = registerKillEvent(this.match, d.killerId, d.id);
+      const killerName = killerIsPlayer ? 'You' : (this.bots.find(b => b.id === d.killerId)?.name ?? d.killerId ?? '?');
+      const victimName = victimIsPlayer ? 'You' : (d.name ?? '?');
+      this.killFeed.addDeathmatchKill(killerName, victimName, getWeaponConfig(d.weaponType).name, killerIsPlayer, victimIsPlayer);
     });
   }
 
@@ -280,6 +300,16 @@ export class Game {
 
     // Spawn bots
     this.spawnAllBots();
+
+    // Initialize match manager and HUD
+    this.match = createMatchState(
+      'player',
+      'You',
+      0xffaa00,
+      this.bots.map((b) => ({ id: b.id, name: b.name, color: b.color })),
+    );
+    this.matchHUD.show();
+
     this.matchActive = true;
 
     cancelAnimationFrame(this.animFrameId);
@@ -307,8 +337,10 @@ export class Game {
   /** Despawn all bots and exit deathmatch. */
   private endMatch(): void {
     this.matchActive = false;
+    this.matchHUD.hide();
     this.botRenderer.clear();
     this.bots = [];
+    this.match = null;
   }
 
   private restartGame(): void {
@@ -487,7 +519,26 @@ export class Game {
     for (const id of this.enemyRenderer.tickDeathAnimations(now)) { this.enemyRenderer.removeMesh(id); }
 
     // ── Bot AI tick (deathmatch only) ──
-    if (this.matchActive) {
+    if (this.matchActive && this.match) {
+      this.match = tickMatch(this.match, dt);
+      this.matchHUD.update(this.match, 'player');
+      // If the match just ended, schedule a return to menu
+      if (this.match.phase === 'finished') {
+        // Brief celebration: show winner overlay, then auto-quit
+        if (this.match.endedAt !== null) {
+          this.match.endedAt += dt;
+          if (this.match.endedAt >= GAME_CONFIG.match.postMatchDelay) {
+            this.match.endedAt = null;
+            this.showMatchOver(this.match);
+            this.matchHUD.hide();
+            this.matchActive = false;
+            this.state.transition('GAME_OVER');
+            this.input.unlockPointer();
+            this.crosshair.hide();
+            return; // stop the loop
+          }
+        }
+      }
       this.tickBots(dt);
       for (const b of this.bots) {
         if (b.isAlive) this.botRenderer.sync(b, dt, camPos);
@@ -737,6 +788,26 @@ export class Game {
     }
   }
 
+  /** Show the match-over screen (uses the existing GameOverScreen). */
+  private showMatchOver(match: MatchState): void {
+    const winner = match.players.find(p => p.id === match.winnerId);
+    const winnerName = winner?.name ?? 'Nobody';
+    const playerKills = match.players.find(p => p.isPlayer)?.kills ?? 0;
+    this.gameOverScreen.show(playerKills * 100, 0, playerKills);
+    // Inject a winner banner
+    const banner = document.createElement('div');
+    banner.textContent = `🏆 WINNER: ${winnerName.toUpperCase()}`;
+    Object.assign(banner.style, {
+      color: '#ffaa00', fontSize: '24px', fontWeight: '800', textAlign: 'center',
+      marginTop: '12px', letterSpacing: '2px', textShadow: '0 0 12px rgba(255,170,0,0.6)',
+    });
+    const screen = (this.gameOverScreen as any).element as HTMLDivElement | undefined;
+    if (screen) screen.appendChild(banner);
+    if (this.input.isMobileDevice) {
+      this.joystick.hide(); this.lookController.hide(); this.actionButtons.hide();
+    }
+  }
+
   private handlePowerUpCollection(dt: number): void {
     const pp = this.player.position;
     for (let i = 0; i < this.powerUps.length; i++) {
@@ -789,6 +860,7 @@ export class Game {
     this.effects.dispose();
     this.hud.dispose(); this.crosshair.dispose(); this.startScreen.dispose();
     this.gameOverScreen.dispose(); this.pauseScreen.dispose(); this.killFeed.dispose();
+    this.matchHUD.dispose();
     this.joystick.dispose(); this.lookController.dispose(); this.actionButtons.dispose();
   }
 }
