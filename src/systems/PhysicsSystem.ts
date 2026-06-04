@@ -41,12 +41,11 @@ export class PhysicsSystem {
     const baseSpeed = GAME_CONFIG.player.moveSpeed * speedMult;
     const speed = input.sprint ? baseSpeed * GAME_CONFIG.player.sprintMultiplier : baseSpeed;
 
-    // Rotate input by camera yaw so W = forward relative to camera
-    // Three.js: at yaw=0, camera looks down -Z; at yaw=PI/2, camera looks down +X
+    // Camera-relative movement: forward vector = (-sinY, 0, -cosY), right = (cosY, 0, -sinY)
     const sinY = Math.sin(cameraYaw);
     const cosY = Math.cos(cameraYaw);
-    const worldX = input.moveX * cosY + input.moveY * sinY;
-    const worldZ = input.moveX * sinY - input.moveY * cosY;
+    const worldX = input.moveX * cosY - input.moveY * sinY;
+    const worldZ = -input.moveX * sinY - input.moveY * cosY;
 
     const moveX = worldX * speed * dt;
     const moveZ = worldZ * speed * dt;

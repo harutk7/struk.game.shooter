@@ -96,11 +96,11 @@ describe('PhysicsSystem', () => {
     expect(r.position.x).toBeGreaterThan(0);
   });
 
-  it('moves forward at yaw=PI/2 (looking right)', () => {
+  it('moves forward at yaw=-PI/2 (looking right)', () => {
     const phys = new PhysicsSystem();
     const p = createPlayer();
     const snap = { ...emptySnap, moveY: 1 };
-    const r = phys.updatePlayer(p, snap, 1, Math.PI / 2);
+    const r = phys.updatePlayer(p, snap, 1, -Math.PI / 2);
     expect(r.position.x).toBeGreaterThan(0);
   });
 

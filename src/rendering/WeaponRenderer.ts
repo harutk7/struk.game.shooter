@@ -53,6 +53,8 @@ export class WeaponRenderer {
     this.muzzleFlashSprite = new THREE.Sprite(spriteMat);
     this.muzzleFlashSprite.scale.set(0.5, 0.5, 1);
     this.muzzleFlashSprite.visible = false;
+    // Sprite.raycast requires raycaster.camera to be set; exclude from weapon raycasts
+    (this.muzzleFlashSprite as any).raycast = () => {};
     this.scene.add(this.muzzleFlashSprite);
 
     // Trail pool
