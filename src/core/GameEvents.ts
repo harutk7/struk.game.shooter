@@ -53,6 +53,14 @@ export interface GameEvents {
   powerUpCollected: { id: string; type: PowerUpType };
   powerUpExpired: { type: PowerUpType };
 
+  /* ── Bots (AI opponents — added in realistic-shooter-overhaul) ── */
+  botSpawned: { id: string; name: string; color: number; difficulty: string; position: { x: number; z: number } };
+  botDamaged: { id: string; amount: number; health: number; maxHealth: number };
+  botKilled: { id: string; name: string; killerId: string | null; weaponType: WeaponType; position: { x: number; z: number } };
+  botRespawned: { id: string; name: string; position: { x: number; z: number } };
+  /** Gunshot heard (bots use this to investigate). */
+  gunshotHeard: { position: { x: number; z: number }; shooterId: string | null };
+
   /* ── Effects (rendering-only) ── */
   screenShake: { intensity: number; duration: number };
   damageFlash: {};

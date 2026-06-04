@@ -14,6 +14,7 @@ import { Skybox } from '../rendering/Skybox';
 import { EnemyRenderer } from '../rendering/EnemyRenderer';
 import { WeaponRenderer } from '../rendering/WeaponRenderer';
 import { PlayerBodyRenderer } from '../rendering/PlayerBodyRenderer';
+import { BotRenderer } from '../rendering/BotRenderer';
 import { Effects } from '../rendering/Effects';
 import { HUD } from '../ui/HUD';
 import { Crosshair } from '../ui/Crosshair';
@@ -28,6 +29,10 @@ import type { PlayerState } from '../models/Player';
 import { createPlayer, tickPowerUps, addPowerUp } from '../models/Player';
 import type { EnemyData } from '../models/Enemy';
 import { isEnemyAlive } from '../models/Enemy';
+import type { BotData } from '../models/Bot';
+import { createBot, respawnBot } from '../models/Bot';
+import { tickBot, type BotWorldSnapshot } from '../systems/BotAI';
+import type { AABBCollider } from '../systems/PhysicsSystem';
 import type { PowerUpData } from '../models/PowerUp';
 import { tickPowerUpLifetime, isPowerUpExpired, getPowerUpConfig } from '../models/PowerUp';
 import type { ScoreState } from '../models/ScoreManager';
@@ -51,6 +56,7 @@ export class Game {
   private enemyRenderer!: EnemyRenderer;
   private weaponRenderer!: WeaponRenderer;
   private playerBody!: PlayerBodyRenderer;
+  private botRenderer!: BotRenderer;
   private effects!: Effects;
   private hud: HUD;
   private crosshair: Crosshair;
@@ -63,6 +69,10 @@ export class Game {
   private actionButtons: TouchActionButtons;
   private player: PlayerState;
   private enemies: EnemyData[] = [];
+  private bots: BotData[] = [];
+  private obstacles: AABBCollider[] = [];
+  private matchActive = false;
+  private lastGunshotAt: { x: number; z: number; t: number } | null = null;
   private powerUps: PowerUpData[] = [];
   private score: ScoreState;
   private wave: WaveState;
@@ -107,11 +117,13 @@ export class Game {
     this.sceneBuilder = new SceneBuilder(this.renderer.scene);
     const colliders = this.sceneBuilder.build();
     this.physics.setColliders(colliders);
+    this.obstacles = colliders;
     this.skybox = new Skybox(this.renderer.scene);
     this.enemyRenderer = new EnemyRenderer(this.renderer.scene);
     this.weaponRenderer = new WeaponRenderer(this.renderer.scene, this.renderer.camera);
     this.playerBody = new PlayerBodyRenderer();
     this.playerBody.mount(this.renderer.camera);
+    this.botRenderer = new BotRenderer(this.renderer.scene);
     this.effects = new Effects(this.renderer.scene, this.renderer.camera);
     this.input.attach(this.renderer.domElement);
 
@@ -124,6 +136,15 @@ export class Game {
     this.gameOverScreen.setOnRestart(() => this.restartGame());
     this.pauseScreen.setOnResume(() => this.resumeGame());
     this.pauseScreen.setOnQuit(() => this.quitToMenu());
+
+    // Dev entrypoint: ?mode=dm on the start screen jumps straight into
+    // a deathmatch round. Keeps wave mode the default for backward compat.
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'dm') {
+        this.startDeathmatch();
+      }
+    } catch { /* non-browser envs */ }
 
     // Auto-pause when pointer lock is released on desktop (e.g. user presses ESC)
     document.addEventListener('pointerlockchange', () => {
@@ -193,7 +214,6 @@ export class Game {
     // Give player all weapons at start
     this.player = { ...this.player, ownedWeapons: ['PISTOL', 'RIFLE', 'SHOTGUN'] };
     this.weapons.initWeapons(['PISTOL', 'RIFLE', 'SHOTGUN']);
-
     this.hud.updateHealth(this.player.health, this.player.maxHealth);
     this.hud.updateScore(0);
     this.hud.updateWave(1);
@@ -201,8 +221,7 @@ export class Game {
     const wp = this.weapons.getCurrentWeapon(this.player);
     if (wp) this.hud.updateAmmo(wp.currentAmmo, wp.reserveAmmo);
 
-    if (this.input.isMobileDevice) {
-      this.joystick.show(); this.lookController.show(); this.actionButtons.show();
+    if (this.input.isMobileDevice) {      this.joystick.show(); this.lookController.show(); this.actionButtons.show();
       this.hud.setMobileLayout();
     }
     this.prevWavePhase = 'spawning';
@@ -223,6 +242,75 @@ export class Game {
     // RAF is at end of loop — loop stops naturally next tick when isPlaying=false
   }
 
+  /**
+   * Start a deathmatch match against AI bots (added in T3).
+   * Spawns N bots, equips player with all weapons including sniper,
+   * and enables bot AI tick. The wave system is NOT active in deathmatch.
+   */
+  private startDeathmatch(): void {
+    this.state.transition('PLAYING');
+    this.input.lockPointer();
+    this.startScreen.hide();
+    this.crosshair.show();
+    this.hud.show();
+
+    // Player starts with all weapons including SNIPER
+    this.player = {
+      ...this.player,
+      ownedWeapons: ['PISTOL', 'RIFLE', 'SHOTGUN', 'SNIPER'],
+    };
+    this.weapons.initWeapons(['PISTOL', 'RIFLE', 'SHOTGUN', 'SNIPER']);
+    this.player = this.weapons.switchWeapon(this.player, 1); // start with RIFLE
+
+    this.hud.updateHealth(this.player.health, this.player.maxHealth);
+    this.hud.updateScore(0);
+    this.hud.updateWave(0);
+    this.hud.updateWeapon(getWeaponConfig(this.player.currentWeapon).name);
+    const wp = this.weapons.getCurrentWeapon(this.player);
+    if (wp) this.hud.updateAmmo(wp.currentAmmo, wp.reserveAmmo);
+
+    if (this.input.isMobileDevice) {
+      this.joystick.show(); this.lookController.show(); this.actionButtons.show();
+      this.hud.setMobileLayout();
+    }
+
+    // Clear wave system state
+    this.prevWavePhase = 'spawning';
+    this.prevWaveNumber = 1;
+
+    // Spawn bots
+    this.spawnAllBots();
+    this.matchActive = true;
+
+    cancelAnimationFrame(this.animFrameId);
+    this.lastTime = performance.now();
+    this.loop();
+  }
+
+  /** Spawn the bot roster, one per spawn point (with rotation if more bots than points). */
+  private spawnAllBots(): void {
+    this.botRenderer.clear();
+    this.bots = [];
+    const points = GAME_CONFIG.bots.spawnPoints as unknown as Array<{ x: number; z: number }>;
+    for (let i = 0; i < GAME_CONFIG.bots.count; i++) {
+      const spawn = points[i % points.length];
+      const bot = createBot(i, spawn);
+      this.bots.push(bot);
+      this.botRenderer.createMesh(bot);
+      this.bus.emit('botSpawned', {
+        id: bot.id, name: bot.name, color: bot.color,
+        difficulty: bot.difficulty, position: { x: spawn.x, z: spawn.z },
+      });
+    }
+  }
+
+  /** Despawn all bots and exit deathmatch. */
+  private endMatch(): void {
+    this.matchActive = false;
+    this.botRenderer.clear();
+    this.bots = [];
+  }
+
   private restartGame(): void {
     cancelAnimationFrame(this.animFrameId);
     this.state._forceSet('MENU');
@@ -232,6 +320,7 @@ export class Game {
     this.prevWavePhase = 'spawning'; this.prevWaveNumber = 1;
     this.cameraYaw = 0; this.cameraPitch = 0;
     this.enemyRenderer.clear(); this.effects.clearPowerUps(); this.weapons.reset();
+    this.endMatch();
     this.gameOverScreen.hide();
     this.startGame();
   }
@@ -255,6 +344,7 @@ export class Game {
     this.prevWavePhase = 'spawning'; this.prevWaveNumber = 1;
     this.cameraYaw = 0; this.cameraPitch = 0;
     this.enemyRenderer.clear(); this.effects.clearPowerUps(); this.weapons.reset();
+    this.endMatch();
     if (this.input.isMobileDevice) {
       this.joystick.hide(); this.lookController.hide(); this.actionButtons.hide();
     }
@@ -396,6 +486,17 @@ export class Game {
     for (const pu of this.powerUps) { if (!pu.collected) this.effects.syncPowerUp(pu, now / 1000); }
     for (const id of this.enemyRenderer.tickDeathAnimations(now)) { this.enemyRenderer.removeMesh(id); }
 
+    // ── Bot AI tick (deathmatch only) ──
+    if (this.matchActive) {
+      this.tickBots(dt);
+      for (const b of this.bots) {
+        if (b.isAlive) this.botRenderer.sync(b, dt, camPos);
+      }
+      for (const id of this.botRenderer.tickDeathAnimations(now)) {
+        this.botRenderer.removeMesh(id);
+      }
+    }
+
     this.weaponRenderer.tick(now);
     this.effects.tickShake(dt);
     this.killFeed.tick(now);
@@ -405,6 +506,109 @@ export class Game {
     // Only schedule next frame while actively playing
     this.animFrameId = requestAnimationFrame(this.loop);
   };
+
+  /**
+   * Per-tick update for all bots: build a world snapshot, run AI, sync
+   * positions, handle bot-fired shots, handle bot respawns.
+   */
+  private tickBots(dt: number): void {
+    const camPos = this.renderer.camera.position;
+    const gunshot = this.lastGunshotAt
+      ? { x: this.lastGunshotAt.x, z: this.lastGunshotAt.z, ageSec: (performance.now() - this.lastGunshotAt.t) / 1000 }
+      : null;
+    const world: BotWorldSnapshot = {
+      playerPosition: { x: this.player.position.x, y: 0, z: this.player.position.z },
+      playerAlive: this.player.isAlive,
+      otherBots: this.bots.map((b) => ({ id: b.id, position: b.position, isAlive: b.isAlive })),
+      obstacles: this.obstacles,
+      arena: { width: GAME_CONFIG.arena.width, depth: GAME_CONFIG.arena.depth },
+      gunshot,
+      matchTime: performance.now() / 1000,
+    };
+
+    const camForward = new THREE.Vector3();
+    this.renderer.camera.getWorldDirection(camForward);
+    // playerEyePos
+    const playerEye = camPos.clone();
+
+    const updated: BotData[] = [];
+    for (const bot of this.bots) {
+      const res = tickBot(bot, world, dt);
+      let next = res.bot;
+      if (res.fired && next.isAlive) {
+        // Bot shot — spawn a tracer and check for player hit
+        const origin = new THREE.Vector3(next.position.x, 1.5, next.position.z);
+        const dir = new THREE.Vector3(res.fireDir.x, 0, res.fireDir.z).normalize();
+        const range = GAME_CONFIG.weapons[next.weapon].range;
+        const rc = new THREE.Raycaster(origin, dir, 0, range);
+        const hits = rc.intersectObjects(this.renderer.scene.children, true);
+        let playerHit = false;
+        const firstHit = hits[0];
+        // Check if any hit is on the player's view (we don't have a player mesh, so test the line vs. a sphere at the camera)
+        // Approximate player hit as ray-to-point distance < 0.6 of camera position
+        const toCam = playerEye.clone().subVectors(playerEye, origin);
+        const proj = toCam.x * dir.x + toCam.y * dir.y + toCam.z * dir.z;
+        if (proj > 0 && proj < range) {
+          const closest = origin.clone().add(dir.clone().multiplyScalar(proj));
+          if (closest.distanceTo(playerEye) < 0.6) playerHit = true;
+        }
+        const endPoint = firstHit ? firstHit.point : origin.clone().add(dir.clone().multiplyScalar(range));
+        this.weaponRenderer.createTrail(origin, endPoint, firstHit != null);
+        if (firstHit) this.weaponRenderer.createImpact(firstHit.point, firstHit.face?.normal);
+        if (playerHit && this.player.isAlive) {
+          // Damage the player
+          const dmg = Math.max(5, Math.floor(GAME_CONFIG.weapons[next.weapon].damage * 0.5));
+          this.player = this.combat.damagePlayer(this.player, dmg);
+          if (this.player.isAlive) {
+            this.bus.emit('playerDamaged', {
+              amount: dmg,
+              currentHealth: this.player.health,
+              maxHealth: this.player.maxHealth,
+            });
+          } else {
+            // Player died — award the bot a kill
+            next = { ...next, kills: next.kills + 1 };
+            this.bus.emit('botKilled', {
+              id: 'player', name: 'You', killerId: next.id,
+              weaponType: next.weapon, position: { x: this.player.position.x, z: this.player.position.z },
+            });
+            this.bus.emit('playerDied', {});
+          }
+        }
+      }
+      // Handle respawn
+      if (!next.isAlive && next.state === 'dead' && next.respawnTimer <= 0) {
+        const points = GAME_CONFIG.bots.spawnPoints as unknown as Array<{ x: number; z: number }>;
+        // Find a free spawn point (not within 6m of the player or any other live bot)
+        let chosen = points[0];
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const candidate = points[Math.floor(Math.random() * points.length)];
+          const distToPlayer = Math.hypot(candidate.x - this.player.position.x, candidate.z - this.player.position.z);
+          const tooCloseToBot = this.bots.some((b) => b !== next && b.isAlive
+            && Math.hypot(candidate.x - b.position.x, candidate.z - b.position.z) < 6);
+          if (distToPlayer > 8 && !tooCloseToBot) { chosen = candidate; break; }
+        }
+        next = respawnBot(next, chosen);
+        this.botRenderer.createMesh(next);
+        this.bus.emit('botRespawned', { id: next.id, name: next.name, position: { x: chosen.x, z: chosen.z } });
+      }
+      // Track pending deaths (the bot just lost all health)
+      if (bot.isAlive && !next.isAlive) {
+        this.botRenderer.startDeathAnimation(next.id);
+        this.bus.emit('botKilled', {
+          id: next.id, name: next.name, killerId: 'player',
+          weaponType: this.player.currentWeapon,
+          position: { x: next.position.x, z: next.position.z },
+        });
+        // Award the player a kill on the scoreboard
+        const kr = addKill(this.score, 100, performance.now() / 1000);
+        this.score = kr.state;
+        this.hud.updateScore(this.score.score);
+      }
+      updated.push(next);
+    }
+    this.bots = updated;
+  }
 
   private updateEnemies(dt: number, now: number): void {
     for (let i = 0; i < this.enemies.length; i++) {
@@ -448,10 +652,40 @@ export class Game {
             }
             break;
           }
+          if (obj.userData.type === 'bot') {
+            const bid = obj.userData.botId as string;
+            const bot = this.bots.find(b => b.id === bid);
+            if (bot && bot.isAlive) {
+              const wp = this.weapons.getCurrentWeapon(this.player)!;
+              const dmg = GAME_CONFIG.weapons[wp.type].damage;
+              const idx = this.bots.indexOf(bot);
+              this.bots[idx] = { ...bot, health: Math.max(0, bot.health - dmg) };
+              if (this.bots[idx].health <= 0) {
+                this.bots[idx] = {
+                  ...this.bots[idx],
+                  isAlive: false,
+                  state: 'dead',
+                  respawnTimer: GAME_CONFIG.bots.respawnDelay,
+                  deaths: bot.deaths + 1,
+                };
+              }
+              this.bus.emit('botDamaged', {
+                id: bot.id, amount: dmg,
+                health: this.bots[idx].health, maxHealth: bot.maxHealth,
+              });
+              this.botRenderer.flashDamage(bot.id);
+            }
+            break;
+          }
           obj = obj.parent;
         }
+        // Broadcast the gunshot for the bot AI to hear
+        this.lastGunshotAt = { x: hit.point.x, z: hit.point.z, t: performance.now() };
+        this.bus.emit('gunshotHeard', { position: { x: hit.point.x, z: hit.point.z }, shooterId: 'player' });
       } else {
         this.weaponRenderer.createTrail(origin, origin.clone().add(dir.clone().multiplyScalar(range)), false);
+        this.lastGunshotAt = { x: origin.x, z: origin.z, t: performance.now() };
+        this.bus.emit('gunshotHeard', { position: { x: origin.x, z: origin.z }, shooterId: 'player' });
       }
     }
   }
@@ -551,6 +785,7 @@ export class Game {
     this.renderer.dispose(); this.sceneBuilder.dispose(); this.skybox.dispose();
     this.enemyRenderer.dispose(); this.weaponRenderer.dispose();
     this.playerBody.dispose();
+    this.botRenderer.dispose();
     this.effects.dispose();
     this.hud.dispose(); this.crosshair.dispose(); this.startScreen.dispose();
     this.gameOverScreen.dispose(); this.pauseScreen.dispose(); this.killFeed.dispose();

@@ -13,6 +13,7 @@ declare module 'three' {
     multiplyScalar(s: number): this;
     normalize(): this;
     distanceTo(v: Vector3): number;
+    dot(v: Vector3): number;
     applyQuaternion(q: Quaternion): Vector3;
     length(): number;
     setScalar(s: number): this;
@@ -241,6 +242,7 @@ declare module 'three' {
 
   export class Texture {
     constructor(canvas?: HTMLCanvasElement);
+    dispose(): void;
   }
 
   export class CanvasTexture extends Texture {
