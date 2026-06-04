@@ -13,6 +13,7 @@ import { SceneBuilder } from '../rendering/SceneBuilder';
 import { Skybox } from '../rendering/Skybox';
 import { EnemyRenderer } from '../rendering/EnemyRenderer';
 import { WeaponRenderer } from '../rendering/WeaponRenderer';
+import { PlayerBodyRenderer } from '../rendering/PlayerBodyRenderer';
 import { Effects } from '../rendering/Effects';
 import { HUD } from '../ui/HUD';
 import { Crosshair } from '../ui/Crosshair';
@@ -49,6 +50,7 @@ export class Game {
   private skybox!: Skybox;
   private enemyRenderer!: EnemyRenderer;
   private weaponRenderer!: WeaponRenderer;
+  private playerBody!: PlayerBodyRenderer;
   private effects!: Effects;
   private hud: HUD;
   private crosshair: Crosshair;
@@ -68,6 +70,9 @@ export class Game {
   private lastTime = 0;
   private cameraYaw = 0;
   private cameraPitch = 0;
+  // Realistic FPV: cumulative walk distance feeds limb-swing phase
+  private walkPhase = 0;
+  private horizontalSpeed = 0;
   // Track wave transitions so events are emitted exactly once
   private prevWavePhase: WavePhase = 'spawning';
   private prevWaveNumber = 1;
@@ -101,6 +106,8 @@ export class Game {
     this.skybox = new Skybox(this.renderer.scene);
     this.enemyRenderer = new EnemyRenderer(this.renderer.scene);
     this.weaponRenderer = new WeaponRenderer(this.renderer.scene, this.renderer.camera);
+    this.playerBody = new PlayerBodyRenderer();
+    this.playerBody.mount(this.renderer.camera);
     this.effects = new Effects(this.renderer.scene, this.renderer.camera);
     this.input.attach(this.renderer.domElement);
 
@@ -285,15 +292,44 @@ export class Game {
     if (snap.reload) this.weapons.tryReload(this.player);
     this.player = this.physics.updatePlayer(this.player, snap, dt, this.cameraYaw);
 
-    // ── Sync camera to player ──
+    // ── Compute movement flags for FPV body ──
+    // Use horizontal velocity magnitude (ignore Y to ignore gravity/jump)
+    const prevX = this.player.position.x;
+    const prevZ = this.player.position.z;
+    this.horizontalSpeed = Math.hypot(this.player.velocity.x, this.player.velocity.z);
+    const isMoving = this.horizontalSpeed > 0.5;
+    const isSprinting = !!(snap.sprint && isMoving);
+    const isCrouching = !!snap.crouch;
+    if (isMoving) {
+      // Phase advances proportional to actual ground speed
+      this.walkPhase += dt * (isSprinting ? 12.0 : 8.0);
+    }
+    // Snap previous position to detect first frame (avoid bob snap on respawn)
+    void prevX; void prevZ;
+
+    // ── Sync camera to player (eye height + head bob) ──
     const cam = this.renderer.camera;
-    cam.position.set(this.player.position.x, this.player.position.y, this.player.position.z);
+    const fpv = GAME_CONFIG.fpv;
+    const eyeH = fpv.eyeHeight * (isCrouching ? fpv.crouchEyeHeightMul : 1.0);
+    const bob = isMoving
+      ? this.playerBody.tick({ dt, isMoving, isCrouching, isSprinting, walkPhase: this.walkPhase })
+      : this.playerBody.tick({ dt, isMoving: false, isCrouching, isSprinting, walkPhase: this.walkPhase });
+    cam.position.set(
+      this.player.position.x + bob.bobX,
+      this.player.position.y + eyeH + bob.bobY,
+      this.player.position.z,
+    );
     const euler = new THREE.Euler(this.cameraPitch, this.cameraYaw, 0, 'YXZ');
     cam.quaternion.setFromEuler(euler);
 
     if (snap.shoot) {
       const fr = this.weapons.tryFire(this.player, now / 1000);
-      if (fr) { this.weaponRenderer.showMuzzleFlash(); this.doShoot(fr.damage, fr.spread, fr.range, fr.pellets); }
+      if (fr) {
+        this.weaponRenderer.showMuzzleFlash();
+        // Drive body recoil (T2 will tune magnitude per weapon)
+        this.playerBody.addRecoil(0.4, 0.08);
+        this.doShoot(fr.damage, fr.spread, fr.range, fr.pellets);
+      }
     } else { this.weapons.release(this.player); }
 
     this.weapons.tickReloads(dt);
@@ -441,7 +477,9 @@ export class Game {
     cancelAnimationFrame(this.animFrameId);
     this.input.detach(); this.bus.clear();
     this.renderer.dispose(); this.sceneBuilder.dispose(); this.skybox.dispose();
-    this.enemyRenderer.dispose(); this.weaponRenderer.dispose(); this.effects.dispose();
+    this.enemyRenderer.dispose(); this.weaponRenderer.dispose();
+    this.playerBody.dispose();
+    this.effects.dispose();
     this.hud.dispose(); this.crosshair.dispose(); this.startScreen.dispose();
     this.gameOverScreen.dispose(); this.pauseScreen.dispose(); this.killFeed.dispose();
     this.joystick.dispose(); this.lookController.dispose(); this.actionButtons.dispose();

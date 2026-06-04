@@ -35,6 +35,20 @@ export const GAME_CONFIG = {
     maxPitch: Math.PI / 2 - 0.01,
   },
 
+  /** First-person view body & motion (added in realistic-shooter-overhaul). */
+  fpv: {
+    /** Vertical eye-bob amplitude in world units (added to camera Y). */
+    bobAmplitude: 0.04,
+    /** Lateral body sway amplitude in world units. */
+    walkSway: 0.025,
+    /** Eye height offset from player.position.y (m). 1.6m = ~5'3". */
+    eyeHeight: 1.6,
+    /** Crouch eye-height multiplier (1.0 = standing, 0.6 = crouched). */
+    crouchEyeHeightMul: 0.65,
+    /** Body z offset from camera (chest sits in front of eyes). */
+    bodyZ: -0.12,
+  },
+
   /** Weapon definitions */
   weapons: {
     PISTOL: {
