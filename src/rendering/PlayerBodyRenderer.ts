@@ -11,12 +11,14 @@
  *   - walking: arm/leg swing + head bob
  *   - crouching: torso/head lowered, knees bent
  *   - firing: arm recoil kick (set externally via addRecoil)
+ *   - weapon switch: weapon drops down, swap, rises
+ *   - weapon reload: magazine pulls out, then re-inserts
  */
 
 import * as THREE from 'three';
 import { GAME_CONFIG } from '../core/GameConfig';
-
-const PIVOT = 'PISTOL' as const; // placeholder; replaced by WeaponModels in T2
+import type { WeaponType } from '../models/Weapon';
+import { buildWeaponModel, disposeWeaponModel } from './WeaponModels';
 
 /** Material palette — kept simple and "tactical" looking. */
 const COLORS = {
@@ -27,6 +29,17 @@ const COLORS = {
   gloves: 0x2a2a2a,
   helmet: 0x2c342c,
   webbing: 0x4a3a2a,
+};
+
+/** State machine for the visible weapon animation. */
+type WeaponAnimState = 'idle' | 'reloading' | 'switchingDown' | 'switchingUp';
+
+/** Per-weapon anchor offsets so different weapons sit naturally in the hand. */
+const WEAPON_ANCHOR: Record<WeaponType, { x: number; y: number; z: number; rotX: number }> = {
+  PISTOL:  { x: 0,    y: 0,    z: 0,    rotX: 0 },
+  RIFLE:   { x: 0,    y: 0,    z: 0,    rotX: 0 },
+  SHOTGUN: { x: 0,    y: 0,    z: 0,    rotX: 0 },
+  SNIPER:  { x: 0,    y: 0,    z: 0,    rotX: 0 },
 };
 
 export interface BodyTickParams {
@@ -67,6 +80,17 @@ export class PlayerBodyRenderer {
   private recoilKick = 0;   // 0..1 decays to 0
   private recoilYaw = 0;    // small random yaw on each shot
   private recoilPitch = 0;  // upward pitch on each shot
+
+  // Weapon rig state
+  private currentWeaponType: WeaponType = 'PISTOL';
+  private currentWeaponModel: THREE.Group | null = null;
+  private weaponAnimState: WeaponAnimState = 'idle';
+  private weaponAnimTimer = 0;       // 0..1 progress through current anim
+  private pendingSwitchTo: WeaponType | null = null;
+  private reloadPhase: 'idle' | 'magOut' | 'magIn' = 'idle';
+  private reloadMagOut = 0;          // 0..1 mag removal progress
+  private reloadMagIn = 0;           // 0..1 mag insert progress
+  private reloadTotalTime = 1.5;     // total reload duration (seconds)
 
   constructor() {
     this.root = new THREE.Group();
@@ -150,6 +174,9 @@ export class PlayerBodyRenderer {
     this.weaponAnchor.position.set(0, -0.22, 0.05);
     this.rightArm.add(this.weaponAnchor);
 
+    // Build the default weapon (PISTOL) immediately so FPV is never empty
+    this.setWeaponModel('PISTOL');
+
     // ── Legs ─────────────────────────────────────────────────
     this.leftLeg = this.buildLeg();
     this.leftLeg.position.set(0.13, -0.75, 0);
@@ -162,11 +189,63 @@ export class PlayerBodyRenderer {
     this.rightLegRest = this.rightLeg.position.clone();
   }
 
+  /** Swap the visible weapon model. */
+  private setWeaponModel(type: WeaponType): void {
+    if (this.currentWeaponModel) {
+      this.weaponAnchor.remove(this.currentWeaponModel);
+      disposeWeaponModel(this.currentWeaponModel);
+    }
+    const model = buildWeaponModel(type);
+    const a = WEAPON_ANCHOR[type];
+    model.position.set(a.x, a.y, a.z);
+    model.rotation.x = a.rotX;
+    this.weaponAnchor.add(model);
+    this.currentWeaponModel = model;
+    this.currentWeaponType = type;
+  }
+
   /** Parent the body to the camera and reveal it. */
   mount(camera: THREE.PerspectiveCamera): void {
     camera.add(this.root);
     this.root.visible = true;
     this.root.position.set(0, 0, 0);
+  }
+
+  /**
+   * Begin a weapon-switch animation. The visible weapon will drop,
+   * swap, then rise. Call from the game when weaponSwitched event fires.
+   */
+  public switchWeaponTo(type: WeaponType): void {
+    if (type === this.currentWeaponType) return;
+    if (this.weaponAnimState !== 'idle') {
+      // Queue the switch; will apply on next 'idle' state
+      this.pendingSwitchTo = type;
+      return;
+    }
+    this.weaponAnimState = 'switchingDown';
+    this.weaponAnimTimer = 0;
+    this.pendingSwitchTo = type;
+  }
+
+  /**
+   * Begin the reload animation. Total duration comes from the config.
+   * Calls weaponReloadComplete() when done — caller should re-arm ammo.
+   */
+  public beginReload(reloadTime: number): void {
+    if (this.weaponAnimState !== 'idle') return;
+    this.weaponAnimState = 'reloading';
+    this.reloadPhase = 'magOut';
+    this.reloadMagOut = 0;
+    this.reloadMagIn = 0;
+    this.reloadTotalTime = reloadTime;
+  }
+
+  /**
+   * True while the body is animating a switch or reload (i.e. the player
+   * shouldn't be allowed to fire/switch during this time).
+   */
+  public isWeaponAnimating(): boolean {
+    return this.weaponAnimState !== 'idle';
   }
 
   /** Detach + dispose */
@@ -253,14 +332,90 @@ export class PlayerBodyRenderer {
     this.torso.position.y += breath;
     this.head.position.y += breath * 0.5;
 
+    // ── Weapon switch / reload / recoil animation ─────────
+    const anim = GAME_CONFIG.weaponAnim;
+    let switchY = 0;       // Y offset applied to weaponAnchor (down = negative)
+    let switchRotX = 0;    // Tilt the weapon forward
+    let magY = 0;          // Magazine Y offset (down = negative)
+    let rightArmRotXOverride: number | null = null;
+
+    if (this.weaponAnimState === 'switchingDown') {
+      this.weaponAnimTimer += dt / anim.switchDownTime;
+      const t = Math.min(1, this.weaponAnimTimer);
+      const e = 1 - Math.pow(1 - t, 2); // ease-out
+      switchY = -anim.switchDropDistance * e;
+      switchRotX = 0.6 * e;
+      if (t >= 1) {
+        if (this.pendingSwitchTo && this.pendingSwitchTo !== this.currentWeaponType) {
+          this.setWeaponModel(this.pendingSwitchTo);
+        }
+        this.pendingSwitchTo = null;
+        this.weaponAnimState = 'switchingUp';
+        this.weaponAnimTimer = 0;
+      }
+    } else if (this.weaponAnimState === 'switchingUp') {
+      this.weaponAnimTimer += dt / anim.switchUpTime;
+      const t = Math.min(1, this.weaponAnimTimer);
+      const e = 1 - Math.pow(1 - t, 2);
+      switchY = -anim.switchDropDistance * (1 - e);
+      switchRotX = 0.6 * (1 - e);
+      if (t >= 1) {
+        this.weaponAnimState = 'idle';
+        this.weaponAnimTimer = 0;
+      }
+    } else if (this.weaponAnimState === 'reloading') {
+      // Two-phase reload: mag out (first 45%), mag in (next 55%)
+      const magOutDuration = this.reloadTotalTime * 0.45;
+      const magInDuration  = this.reloadTotalTime * 0.55;
+      if (this.reloadPhase === 'magOut') {
+        this.reloadMagOut += dt / magOutDuration;
+        const t = Math.min(1, this.reloadMagOut);
+        const e = 1 - Math.pow(1 - t, 2);
+        magY = -0.07 * e;             // magazine drops out
+        rightArmRotXOverride = -0.3 * e;  // arm tilts the weapon down
+        if (t >= 1) {
+          this.reloadPhase = 'magIn';
+          this.reloadMagIn = 0;
+        }
+      } else if (this.reloadPhase === 'magIn') {
+        this.reloadMagIn += dt / magInDuration;
+        const t = Math.min(1, this.reloadMagIn);
+        const e = Math.pow(t, 2);
+        magY = -0.07 * (1 - e);
+        rightArmRotXOverride = -0.3 * (1 - e);
+        if (t >= 1) {
+          this.weaponAnimState = 'idle';
+          this.reloadPhase = 'idle';
+          this.reloadMagOut = 0;
+          this.reloadMagIn = 0;
+        }
+      }
+    } else {
+      // Apply pending switch if one was queued during a busy anim
+      if (this.pendingSwitchTo && this.pendingSwitchTo !== this.currentWeaponType) {
+        this.weaponAnimState = 'switchingDown';
+        this.weaponAnimTimer = 0;
+      }
+    }
+
     // ── Recoil: right arm kicks back + up, body twists slightly ─
     const armKickBack = this.recoilKick * 0.45;
     const armKickUp = this.recoilKick * 0.18;
-    this.rightArm.rotation.x = swing * 0.5 + armKickBack;
+    const recoilX = swing * 0.5 + armKickBack;
+    this.rightArm.rotation.x = rightArmRotXOverride !== null ? rightArmRotXOverride : recoilX;
     this.rightArm.rotation.z = -this.recoilKick * 0.08;
-    this.weaponAnchor.position.y = -0.22 + armKickUp;
+    this.weaponAnchor.position.y = -0.22 + armKickUp + switchY;
+    this.weaponAnchor.rotation.x = switchRotX;
     this.torso.rotation.y = this.recoilYaw * this.recoilKick * 0.3;
     this.torso.rotation.x = this.crouchBlend * 0.35 - this.recoilPitch * this.recoilKick * 0.25;
+
+    // Apply magazine animation: find the 'magazine' child of the current weapon
+    if (this.currentWeaponModel) {
+      const mag = this.currentWeaponModel.getObjectByName('magazine');
+      if (mag) {
+        mag.position.y += magY;
+      }
+    }
 
     // ── Head bob (return value — applied to camera) ──────
     const bobY = isMoving
@@ -342,5 +497,4 @@ export class PlayerBodyRenderer {
   }
 }
 
-/** @deprecated placeholder for legacy imports — see WeaponModels in T2. */
-export const PIVOT_PLACEHOLDER = PIVOT;
+// (PIVOT_PLACEHOLDER removed in T2 — see WeaponModels for actual weapon geometry)

@@ -73,6 +73,10 @@ export class Game {
   // Realistic FPV: cumulative walk distance feeds limb-swing phase
   private walkPhase = 0;
   private horizontalSpeed = 0;
+  // Throttle for empty-click SFX so a held trigger doesn't spam
+  private lastEmptyClickAt = -10;
+  // Cached AudioContext for the empty-click SFX (lazy-initialized)
+  private audioCtx: AudioContext | null = null;
   // Track wave transitions so events are emitted exactly once
   private prevWavePhase: WavePhase = 'spawning';
   private prevWaveNumber = 1;
@@ -144,9 +148,18 @@ export class Game {
     this.bus.on('playerHealed', (d) => this.hud.updateHealth(d.currentHealth, this.player.maxHealth));
     this.bus.on('playerDied', () => this.handleGameOver());
     this.bus.on('ammoChanged', (d) => this.hud.updateAmmo(d.ammo, d.reserve));
-    this.bus.on('weaponReloadStart', () => this.hud.showReloading(true));
+    this.bus.on('weaponReloadStart', (d) => {
+      this.hud.showReloading(true);
+      // Drive the body reload animation
+      const wp = this.weapons.getWeapon(d.weaponType);
+      if (wp) this.playerBody.beginReload(wp ? (GAME_CONFIG.weapons[wp.type] as any).reloadTime : 1.5);
+    });
     this.bus.on('weaponReloadEnd', () => this.hud.showReloading(false));
-    this.bus.on('weaponSwitched', (d) => this.hud.updateWeapon(getWeaponConfig(d.to).name));
+    this.bus.on('weaponSwitched', (d) => {
+      this.hud.updateWeapon(getWeaponConfig(d.to).name);
+      this.playerBody.switchWeaponTo(d.to);
+    });
+    this.bus.on('weaponEmptyClick', () => this.playEmptyClickSfx());
     this.bus.on('enemyKilled', (d) => {
       const result = addKill(this.score, d.points, performance.now() / 1000);
       this.score = result.state;
@@ -323,12 +336,24 @@ export class Game {
     cam.quaternion.setFromEuler(euler);
 
     if (snap.shoot) {
-      const fr = this.weapons.tryFire(this.player, now / 1000);
-      if (fr) {
-        this.weaponRenderer.showMuzzleFlash();
-        // Drive body recoil (T2 will tune magnitude per weapon)
-        this.playerBody.addRecoil(0.4, 0.08);
-        this.doShoot(fr.damage, fr.spread, fr.range, fr.pellets);
+      // ── Empty-click detection: pull on an empty magazine ──
+      const currentWp = this.weapons.getCurrentWeapon(this.player);
+      if (currentWp && currentWp.currentAmmo <= 0 && !currentWp.isReloading) {
+        // Cooldown: at most one click per 0.15s so a held trigger doesn't spam
+        const t = now / 1000;
+        if (t - this.lastEmptyClickAt > 0.15) {
+          this.bus.emit('weaponEmptyClick', { weaponType: this.player.currentWeapon });
+          this.lastEmptyClickAt = t;
+        }
+      } else {
+        const fr = this.weapons.tryFire(this.player, now / 1000);
+        if (fr) {
+          this.weaponRenderer.showMuzzleFlash();
+          // Per-weapon recoil feel from config
+          const feel = GAME_CONFIG.weaponFeel[fr.weapon.type];
+          this.playerBody.addRecoil(feel.kick, feel.sway);
+          this.doShoot(fr.damage, fr.spread, fr.range, fr.pellets);
+        }
       }
     } else { this.weapons.release(this.player); }
 
@@ -428,6 +453,53 @@ export class Game {
       } else {
         this.weaponRenderer.createTrail(origin, origin.clone().add(dir.clone().multiplyScalar(range)), false);
       }
+    }
+  }
+
+  /**
+   * Play a synthesized "empty click" via the Web Audio API.
+   * No audio file required — pure oscillator + noise burst.
+   */
+  private playEmptyClickSfx(): void {
+    try {
+      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!Ctx) return;
+      const ctx: AudioContext = this.audioCtx || new Ctx();
+      this.audioCtx = ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+
+      const now = ctx.currentTime;
+      // Click 1: very short noise burst
+      const bufferSize = Math.floor(0.05 * ctx.sampleRate);
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.1));
+      }
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.value = 2000;
+      noise.connect(filter).connect(gain).connect(ctx.destination);
+      noise.start(now);
+      noise.stop(now + 0.06);
+
+      // Click 2: brief tone for the "click" of the trigger
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(900, now);
+      const g2 = ctx.createGain();
+      g2.gain.setValueAtTime(0.08, now);
+      g2.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+      osc.connect(g2).connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.05);
+    } catch {
+      // Audio not available; fail silently.
     }
   }
 

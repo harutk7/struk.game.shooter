@@ -49,6 +49,24 @@ export const GAME_CONFIG = {
     bodyZ: -0.12,
   },
 
+  /** Per-weapon body-recoil / sway tuning (added in realistic-shooter-overhaul). */
+  weaponFeel: {
+    PISTOL:  { kick: 0.30, sway: 0.10, raise: 0.35 },
+    RIFLE:   { kick: 0.25, sway: 0.08, raise: 0.40 },
+    SHOTGUN: { kick: 0.60, sway: 0.18, raise: 0.55 },
+    SNIPER:  { kick: 0.75, sway: 0.05, raise: 0.50 },
+  },
+
+  /** Weapon switch animation timing (added in realistic-shooter-overhaul). */
+  weaponAnim: {
+    /** seconds spent lowering the current weapon before swap */
+    switchDownTime: 0.12,
+    /** seconds spent raising the new weapon after swap */
+    switchUpTime: 0.20,
+    /** how far down the weapon moves during switch (local Y units) */
+    switchDropDistance: 0.25,
+  },
+
   /** Weapon definitions */
   weapons: {
     PISTOL: {
@@ -84,6 +102,18 @@ export const GAME_CONFIG = {
       automatic: false,
       pellets: 8,
       reserveAmmo: 32,
+    },
+    // Added in realistic-shooter-overhaul (CS 1.6-style bolt-action)
+    SNIPER: {
+      name: 'Sniper Rifle',
+      damage: 90,
+      fireRate: 1.0,
+      magazineSize: 5,
+      reloadTime: 2.6,
+      range: 250,
+      spread: 0.3,       // very tight
+      automatic: false,
+      reserveAmmo: 20,
     },
   },
 

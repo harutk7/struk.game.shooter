@@ -28,6 +28,8 @@ export interface GameEvents {
   weaponSwitched: { from: WeaponType | null; to: WeaponType };
   ammoChanged: { weaponType: WeaponType; ammo: number; reserve: number };
   ammoDepleted: { weaponType: WeaponType };
+  /** Trigger pulled on an empty magazine (no fire, no ammo change). */
+  weaponEmptyClick: { weaponType: WeaponType };
 
   /* ── Enemies ── */
   enemySpawned: { id: string; type: EnemyType; position: { x: number; y: number; z: number } };

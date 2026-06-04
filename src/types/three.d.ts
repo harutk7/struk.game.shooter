@@ -77,6 +77,7 @@ declare module 'three' {
     lookAt(x: number | Vector3, y?: number, z?: number): void;
     getWorldDirection(dir: Vector3): Vector3;
     traverse(callback: (object: Object3D) => void): void;
+    getObjectByName(name: string): Object3D | undefined;
   }
 
   export class Camera extends Object3D {

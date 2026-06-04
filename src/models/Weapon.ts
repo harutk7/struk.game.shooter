@@ -4,7 +4,7 @@
 
 import { GAME_CONFIG } from '../core/GameConfig';
 
-export type WeaponType = 'PISTOL' | 'RIFLE' | 'SHOTGUN';
+export type WeaponType = 'PISTOL' | 'RIFLE' | 'SHOTGUN' | 'SNIPER';
 
 export interface WeaponState {
   type: WeaponType;
