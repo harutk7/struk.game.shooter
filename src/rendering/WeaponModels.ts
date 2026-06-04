@@ -21,6 +21,67 @@ const MAT = {
   darkWood: () => new THREE.MeshStandardMaterial({ color: 0x3a2a14, roughness: 0.9 }),
 };
 
+/**
+ * Apply a procedural camo to all named 'body' / 'handguard' / 'stock'
+ * materials of a weapon model. Camo types:
+ *   - 'woodland' — green/brown/black stripes
+ *   - 'desert'   — tan/khaki/brown stripes
+ *   - 'urban'    — grey/black blocks
+ *   - 'none'     — leave as-is
+ *
+ * The camo is implemented by overriding the material's color with a
+ * striped vertex-color-style overlay (a small canvas texture).
+ */
+export function applyCamo(model: THREE.Object3D, camo: 'none' | 'woodland' | 'desert' | 'urban'): void {
+  if (camo === 'none') return;
+  const palette = (() => {
+    switch (camo) {
+      case 'woodland': return ['#3a4a1a', '#1f2a0e', '#5a4a2a', '#2a3a14'];
+      case 'desert':   return ['#c2a060', '#a08040', '#806030', '#d8b870'];
+      case 'urban':    return ['#4a4a4a', '#2a2a2a', '#6a6a6a', '#3a3a3a'];
+      default:         return [];
+    }
+  })();
+  const tex = makeCamoTexture(palette);
+  const targets = ['body', 'handguard', 'stock'];
+  model.traverse((o: THREE.Object3D) => {
+    const m = o as THREE.Mesh;
+    if (targets.includes(o.name) && (m as any).material) {
+      const mat = m.material as THREE.MeshStandardMaterial;
+      if (mat && mat.map === null) {
+        mat.map = tex;
+        mat.color.setHex(0xffffff);
+        mat.needsUpdate = true;
+      }
+    }
+  });
+}
+
+function makeCamoTexture(colors: string[]): THREE.Texture {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const ctx = c.getContext('2d')!;
+  // Base color
+  ctx.fillStyle = colors[0] || '#3a4a1a';
+  ctx.fillRect(0, 0, 64, 64);
+  // Random blobs in the other colors
+  for (let i = 0; i < 18; i++) {
+    ctx.fillStyle = colors[1 + Math.floor(Math.random() * (colors.length - 1))] || colors[0];
+    const x = Math.random() * 64, y = Math.random() * 64;
+    const r = 4 + Math.random() * 8;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * 0.7, Math.random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  return tex;
+}
+
 /** Standard mesh creator that names the result for later animation. */
 function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, name: string): THREE.Mesh {
   const m = new THREE.Mesh(geo, mat);
@@ -211,15 +272,18 @@ function buildSniper(): THREE.Group {
   return g;
 }
 
-/** Build a model for the given weapon type. */
-export function buildWeaponModel(type: WeaponType): THREE.Group {
+/** Build a model for the given weapon type, with an optional camo pattern. */
+export function buildWeaponModel(type: WeaponType, camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none'): THREE.Group {
+  let g: THREE.Group;
   switch (type) {
-    case 'PISTOL':  return buildPistol();
-    case 'RIFLE':   return buildRifle();
-    case 'SHOTGUN': return buildShotgun();
-    case 'SNIPER':  return buildSniper();
-    default:        return buildPistol();
+    case 'PISTOL':  g = buildPistol(); break;
+    case 'RIFLE':   g = buildRifle(); break;
+    case 'SHOTGUN': g = buildShotgun(); break;
+    case 'SNIPER':  g = buildSniper(); break;
+    default:        g = buildPistol();
   }
+  if (camo !== 'none') applyCamo(g, camo);
+  return g;
 }
 
 /** Dispose all materials/geometries inside a weapon model. */

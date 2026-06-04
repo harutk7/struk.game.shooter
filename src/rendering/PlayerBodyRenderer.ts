@@ -195,7 +195,11 @@ export class PlayerBodyRenderer {
       this.weaponAnchor.remove(this.currentWeaponModel);
       disposeWeaponModel(this.currentWeaponModel);
     }
-    const model = buildWeaponModel(type);
+    // RIFLE and SNIPER get a procedural camo by default (T5 polish).
+    const camo: 'none' | 'woodland' | 'desert' | 'urban' =
+      type === 'RIFLE' ? 'woodland' :
+      type === 'SNIPER' ? 'desert' : 'none';
+    const model = buildWeaponModel(type, camo);
     const a = WEAPON_ANCHOR[type];
     model.position.set(a.x, a.y, a.z);
     model.rotation.x = a.rotX;

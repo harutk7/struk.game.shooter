@@ -22,6 +22,14 @@ interface ImpactData {
   lifetime: number;
 }
 
+interface BloodData {
+  group: THREE.Group;
+  sprites: THREE.Sprite[];
+  velocities: Array<{ x: number; y: number; z: number }>;
+  createdAt: number;
+  lifetime: number;
+}
+
 export class WeaponRenderer {
   private scene: THREE.Scene;
   private camera: THREE.Camera;
@@ -30,9 +38,15 @@ export class WeaponRenderer {
 
   private trailPool: ObjectPool<TrailData>;
   private impactPool: ObjectPool<ImpactData>;
+  private bloodPool: ObjectPool<BloodData>;
 
   private activeTrails: TrailData[] = [];
   private activeImpacts: ImpactData[] = [];
+  private activeBlood: BloodData[] = [];
+
+  // Cached for the blood animation delta-time
+  private lastTickDt = 0;
+  private _lastTickTime: number | null = null;
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     this.scene = scene;
@@ -69,6 +83,13 @@ export class WeaponRenderer {
       () => this.createImpactData(),
       (i) => this.resetImpact(i),
       20,
+    );
+
+    // Blood pool
+    this.bloodPool = new ObjectPool<BloodData>(
+      () => this.createBloodData(),
+      (b) => this.resetBlood(b),
+      12,
     );
   }
 
@@ -141,6 +162,65 @@ export class WeaponRenderer {
     i.sphereMaterial.opacity = 1;
     i.ringMaterial.opacity = 0.8;
     i.ring.scale.set(1, 1, 1);
+  }
+
+  /** Create a small puff of red sprite particles for a hit on flesh. */
+  private createBloodData(): BloodData {
+    const group = new THREE.Group();
+    const sprites: THREE.Sprite[] = [];
+    const velocities: Array<{ x: number; y: number; z: number }> = [];
+    const N = 6;
+    for (let i = 0; i < N; i++) {
+      const mat = new THREE.SpriteMaterial({
+        color: 0xaa1010,
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+      });
+      const s = new THREE.Sprite(mat);
+      s.scale.set(0.10, 0.10, 1);
+      s.visible = false;
+      (s as any).raycast = () => {};
+      group.add(s);
+      sprites.push(s);
+      velocities.push({ x: 0, y: 0, z: 0 });
+    }
+    this.scene.add(group);
+    return { group, sprites, velocities, createdAt: 0, lifetime: 0.6 };
+  }
+
+  private resetBlood(b: BloodData): void {
+    b.group.visible = false;
+    for (const s of b.sprites) {
+      s.visible = false;
+      (s.material as THREE.SpriteMaterial).opacity = 1;
+    }
+  }
+
+  /** Spawn a blood splatter at `point`, flung outward by `normal`. */
+  createBlood(point: THREE.Vector3, normal?: THREE.Vector3): void {
+    const b = this.bloodPool.acquire();
+    b.group.position.copy(point);
+    b.group.visible = true;
+    for (let i = 0; i < b.sprites.length; i++) {
+      const s = b.sprites[i];
+      s.visible = true;
+      s.position.set(0, 0, 0);
+      // Random outward velocity, biased along the normal
+      const nx = normal?.x ?? 0;
+      const ny = normal?.y ?? 0;
+      const nz = normal?.z ?? 0;
+      const jx = (Math.random() - 0.5) * 1.5;
+      const jy = Math.random() * 1.0;
+      const jz = (Math.random() - 0.5) * 1.5;
+      b.velocities[i] = {
+        x: nx * 2 + jx,
+        y: ny * 2 + jy,
+        z: nz * 2 + jz,
+      };
+    }
+    b.createdAt = performance.now();
+    this.activeBlood.push(b);
   }
 
   /** Show muzzle flash at camera position. */
@@ -225,6 +305,32 @@ export class WeaponRenderer {
         imp.sphereMaterial.opacity = 1 - progress;
       }
     }
+
+    // Animate blood splatter
+    this.lastTickDt = (now - (this._lastTickTime ?? now)) / 1000;
+    this._lastTickTime = now;
+    const useDt = Math.min(this.lastTickDt, 0.05);
+    for (let i = this.activeBlood.length - 1; i >= 0; i--) {
+      const b = this.activeBlood[i];
+      const age = (now - b.createdAt) / 1000;
+      const progress = age / b.lifetime;
+      if (progress >= 1) {
+        this.activeBlood.splice(i, 1);
+        this.bloodPool.release(b);
+        continue;
+      }
+      for (let j = 0; j < b.sprites.length; j++) {
+        const s = b.sprites[j];
+        const v = b.velocities[j];
+        s.position.x += v.x * useDt;
+        s.position.y += v.y * useDt - 3 * useDt * progress; // mild gravity
+        s.position.z += v.z * useDt;
+        const mat = s.material as THREE.SpriteMaterial;
+        mat.opacity = 1 - progress;
+        const sc = 0.10 * (1 - progress * 0.4);
+        s.scale.set(sc, sc, 1);
+      }
+    }
   }
 
   dispose(): void {
@@ -245,7 +351,14 @@ export class WeaponRenderer {
       i.ring.geometry.dispose();
       i.ringMaterial.dispose();
     }
+    for (const b of this.activeBlood) {
+      this.scene.remove(b.group);
+      for (const s of b.sprites) {
+        (s.material as THREE.SpriteMaterial).dispose();
+      }
+    }
     this.trailPool.clear();
     this.impactPool.clear();
+    this.bloodPool.clear();
   }
 }

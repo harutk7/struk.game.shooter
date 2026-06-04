@@ -157,6 +157,8 @@ declare module 'three' {
     metalness: number;
     emissive: Color;
     emissiveIntensity: number;
+    map: Texture | null;
+    needsUpdate: boolean;
     constructor(params?: Record<string, any>);
   }
 
@@ -243,6 +245,11 @@ declare module 'three' {
   export class Texture {
     constructor(canvas?: HTMLCanvasElement);
     dispose(): void;
+    wrapS: number;
+    wrapT: number;
+    repeat: { x: number; y: number; set(x: number, y: number): void };
+    magFilter: number;
+    minFilter: number;
   }
 
   export class CanvasTexture extends Texture {
@@ -262,4 +269,7 @@ declare module 'three' {
   export const PCFSoftShadowMap: number;
   export const SRGBColorSpace: string;
   export const ACESFilmicToneMapping: number;
+  export const RepeatWrapping: number;
+  export const NearestFilter: number;
+  export const LinearFilter: number;
 }

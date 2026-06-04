@@ -474,6 +474,7 @@ export class Game {
           // Per-weapon recoil feel from config
           const feel = GAME_CONFIG.weaponFeel[fr.weapon.type];
           this.playerBody.addRecoil(feel.kick, feel.sway);
+          this.crosshair.setRecoilKick(feel.kick);
           this.doShoot(fr.damage, fr.spread, fr.range, fr.pellets);
         }
       }
@@ -552,6 +553,7 @@ export class Game {
     this.effects.tickShake(dt);
     this.killFeed.tick(now);
     this.crosshair.setSpread(Math.abs(snap.moveX) + Math.abs(snap.moveY));
+    this.crosshair.tick(dt, now);
     this.renderer.render();
 
     // Only schedule next frame while actively playing
@@ -605,7 +607,11 @@ export class Game {
         }
         const endPoint = firstHit ? firstHit.point : origin.clone().add(dir.clone().multiplyScalar(range));
         this.weaponRenderer.createTrail(origin, endPoint, firstHit != null);
-        if (firstHit) this.weaponRenderer.createImpact(firstHit.point, firstHit.face?.normal);
+        if (firstHit) {
+          this.weaponRenderer.createImpact(firstHit.point, firstHit.face?.normal);
+          // Bots always "hit" organic material in this game — blood splatter
+          this.weaponRenderer.createBlood(firstHit.point, firstHit.face?.normal);
+        }
         if (playerHit && this.player.isAlive) {
           // Damage the player
           const dmg = Math.max(5, Math.floor(GAME_CONFIG.weapons[next.weapon].damage * 0.5));
@@ -690,9 +696,11 @@ export class Game {
         const hit = hits[0];
         this.weaponRenderer.createTrail(origin, hit.point, true);
         this.weaponRenderer.createImpact(hit.point, hit.face?.normal);
+        let hitFlesh = false;
         let obj: THREE.Object3D | null = hit.object;
         while (obj) {
           if (obj.userData.type === 'enemy') {
+            hitFlesh = true;
             const eid = obj.userData.enemyId as string;
             const enemy = this.enemies.find(e => e.id === eid);
             if (enemy && isEnemyAlive(enemy)) {
@@ -704,6 +712,7 @@ export class Game {
             break;
           }
           if (obj.userData.type === 'bot') {
+            hitFlesh = true;
             const bid = obj.userData.botId as string;
             const bot = this.bots.find(b => b.id === bid);
             if (bot && bot.isAlive) {
@@ -729,6 +738,11 @@ export class Game {
             break;
           }
           obj = obj.parent;
+        }
+        // Flesh hit (T5 polish): blood splatter + hit marker
+        if (hitFlesh) {
+          this.weaponRenderer.createBlood(hit.point, hit.face?.normal);
+          this.crosshair.showHitMarker();
         }
         // Broadcast the gunshot for the bot AI to hear
         this.lastGunshotAt = { x: hit.point.x, z: hit.point.z, t: performance.now() };
