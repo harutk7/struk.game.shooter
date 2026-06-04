@@ -9,6 +9,9 @@ export class HUD {
   private waveText: HTMLSpanElement;
   private weaponText: HTMLSpanElement;
   private reloadIndicator: HTMLDivElement;
+  private waveBreakOverlay: HTMLDivElement;
+  private waveBreakTitle: HTMLSpanElement;
+  private waveBreakCountdown: HTMLSpanElement;
 
   constructor() {
     this.container = document.createElement('div');
@@ -21,6 +24,9 @@ export class HUD {
     this.waveText = document.createElement('span');
     this.weaponText = document.createElement('span');
     this.reloadIndicator = document.createElement('div');
+    this.waveBreakOverlay = document.createElement('div');
+    this.waveBreakTitle = document.createElement('span');
+    this.waveBreakCountdown = document.createElement('span');
     this.init();
   }
 
@@ -75,22 +81,53 @@ export class HUD {
     ammoCol.appendChild(this.reserveText);
     this.container.appendChild(ammoCol);
 
-    // ── Score + wave (top right — hidden until game starts) ──
+    // ── Score + wave (top right) ──
     Object.assign(this.topRight.style, {
       position: 'fixed', top: '20px', right: '20px',
       textAlign: 'right', pointerEvents: 'none',
       zIndex: '1000', fontFamily: "'Segoe UI', Arial, sans-serif",
       userSelect: 'none', display: 'none',
     });
+
+    const scoreLabel = document.createElement('span');
+    Object.assign(scoreLabel.style, { color: '#888', fontSize: '10px', letterSpacing: '2px', fontWeight: '600', display: 'block', marginBottom: '2px' });
+    scoreLabel.textContent = 'SCORE';
+    this.topRight.appendChild(scoreLabel);
+
     Object.assign(this.scoreText.style, { color: '#fff', fontSize: '22px', fontWeight: '700', textShadow: '0 2px 6px rgba(0,0,0,0.5)', display: 'block' });
     this.scoreText.textContent = '0';
     this.topRight.appendChild(this.scoreText);
+
     Object.assign(this.waveText.style, { color: '#aaa', fontSize: '14px', display: 'block', marginTop: '4px' });
     this.waveText.textContent = 'WAVE 1';
     this.topRight.appendChild(this.waveText);
 
+    // ── Wave break overlay (center screen) ──
+    Object.assign(this.waveBreakOverlay.style, {
+      position: 'fixed', top: '50%', left: '50%',
+      transform: 'translate(-50%, -50%)',
+      textAlign: 'center', pointerEvents: 'none',
+      zIndex: '2200', fontFamily: "'Segoe UI', Arial, sans-serif",
+      userSelect: 'none', display: 'none',
+      flexDirection: 'column', alignItems: 'center', gap: '8px',
+    });
+
+    Object.assign(this.waveBreakTitle.style, {
+      color: '#ffcc00', fontSize: 'clamp(20px, 4vw, 32px)',
+      fontWeight: '700', letterSpacing: '4px',
+      textShadow: '0 0 20px rgba(255,200,0,0.6), 0 2px 6px rgba(0,0,0,0.6)',
+    });
+    this.waveBreakOverlay.appendChild(this.waveBreakTitle);
+
+    Object.assign(this.waveBreakCountdown.style, {
+      color: '#fff', fontSize: 'clamp(14px, 2.5vw, 20px)',
+      fontWeight: '400', letterSpacing: '2px', opacity: '0.8',
+    });
+    this.waveBreakOverlay.appendChild(this.waveBreakCountdown);
+
     document.body.appendChild(this.container);
     document.body.appendChild(this.topRight);
+    document.body.appendChild(this.waveBreakOverlay);
   }
 
   show(): void {
@@ -101,6 +138,12 @@ export class HUD {
   hide(): void {
     this.container.style.display = 'none';
     this.topRight.style.display = 'none';
+    this.waveBreakOverlay.style.display = 'none';
+  }
+
+  /** Push the bottom HUD bar up on mobile to clear joystick/button controls. */
+  setMobileLayout(): void {
+    this.container.style.bottom = '180px';
   }
 
   updateHealth(current: number, max: number): void {
@@ -128,8 +171,26 @@ export class HUD {
     this.reloadIndicator.style.opacity = show ? '1' : '0';
   }
 
+  showWaveBreak(nextWave: number, duration: number): void {
+    this.waveBreakTitle.textContent = `WAVE ${nextWave - 1} COMPLETE`;
+    this.waveBreakCountdown.textContent = `WAVE ${nextWave} INCOMING...`;
+    this.waveBreakOverlay.style.display = 'flex';
+    void this.waveBreakOverlay.offsetWidth; // force reflow for animation
+    this.updateWaveBreak(duration);
+  }
+
+  updateWaveBreak(timeLeft: number): void {
+    const secs = Math.ceil(Math.max(0, timeLeft));
+    this.waveBreakCountdown.textContent = `NEXT WAVE IN ${secs}...`;
+  }
+
+  hideWaveBreak(): void {
+    this.waveBreakOverlay.style.display = 'none';
+  }
+
   dispose(): void {
     if (document.body.contains(this.container)) document.body.removeChild(this.container);
     if (document.body.contains(this.topRight)) document.body.removeChild(this.topRight);
+    if (document.body.contains(this.waveBreakOverlay)) document.body.removeChild(this.waveBreakOverlay);
   }
 }

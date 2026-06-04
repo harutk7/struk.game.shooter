@@ -26,6 +26,7 @@ export class TouchActionButtons {
     Object.assign(this.container.style, {
       position: 'fixed', bottom: '40px', right: '40px',
       display: 'none', flexDirection: 'column', gap: '10px', zIndex: '2000',
+      touchAction: 'none',
     });
 
     this.makeBtn(this.shootBtn, 'shoot', 72, 'rgba(220,50,50,0.75)', '🔫');

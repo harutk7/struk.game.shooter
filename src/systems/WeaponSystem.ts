@@ -147,7 +147,33 @@ export class WeaponSystem {
     }
   }
 
-  /** Switch player to a different weapon. */
+  /** Switch player to a weapon by direct slot index (0=first, 1=second, …). */
+  switchToSlot(player: PlayerState, slot: number): PlayerState {
+    const owned = player.ownedWeapons;
+    if (slot < 0 || slot >= owned.length) return player;
+    const newWeapon = owned[slot];
+    if (newWeapon === player.currentWeapon) return player;
+
+    const updated = switchWeapon(player, newWeapon);
+
+    this.bus.emit('weaponSwitched', {
+      from: player.currentWeapon,
+      to: newWeapon,
+    });
+
+    const wp = this.weapons.get(newWeapon);
+    if (wp) {
+      this.bus.emit('ammoChanged', {
+        weaponType: wp.type,
+        ammo: wp.currentAmmo,
+        reserve: wp.reserveAmmo,
+      });
+    }
+
+    return updated;
+  }
+
+  /** Switch player to a different weapon by direction (1=next, -1=prev). */
   switchWeapon(player: PlayerState, direction: number): PlayerState {
     const owned = player.ownedWeapons;
     if (owned.length <= 1) return player;

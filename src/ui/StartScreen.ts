@@ -45,11 +45,13 @@ export class StartScreen {
     if (isMobile) {
       ctrl.innerHTML =
         'Left Joystick Move &bull; Right Drag Look' +
-        '<br>🔫 Shoot &bull; ⬆ Jump &bull; ↻ Reload &bull; ⇄ Weapon &bull; ⏸ Pause';
+        '<br>🔫 Shoot &bull; ⬆ Jump &bull; ↻ Reload &bull; ⇄ Cycle Weapon &bull; ⏸ Pause' +
+        '<br>3 Weapons: Pistol &bull; Assault Rifle &bull; Shotgun';
     } else {
       ctrl.innerHTML =
         'WASD Move &bull; Mouse Look &bull; Click Shoot &bull; R Reload' +
-        '<br>Space Jump &bull; Shift Sprint &bull; 1/2 or Scroll Switch Weapon &bull; Esc Pause';
+        '<br>Space Jump &bull; Shift Sprint &bull; 1/2/3 or Scroll Switch Weapon &bull; Esc Pause' +
+        '<br>3 Weapons: 1=Pistol &bull; 2=Assault Rifle &bull; 3=Shotgun';
     }
     Object.assign(ctrl.style, {
       color: '#555', fontSize: 'clamp(11px, 1.8vw, 13px)', marginTop: '50px',

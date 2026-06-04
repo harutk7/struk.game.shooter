@@ -24,7 +24,7 @@ import { VirtualJoystick } from '../ui/mobile/VirtualJoystick';
 import { TouchLookController } from '../ui/mobile/TouchLookController';
 import { TouchActionButtons } from '../ui/mobile/TouchActionButtons';
 import type { PlayerState } from '../models/Player';
-import { createPlayer, tickInvincibility, tickPowerUps, addPowerUp } from '../models/Player';
+import { createPlayer, tickPowerUps, addPowerUp } from '../models/Player';
 import type { EnemyData } from '../models/Enemy';
 import { isEnemyAlive } from '../models/Enemy';
 import type { PowerUpData } from '../models/PowerUp';
@@ -113,6 +113,16 @@ export class Game {
     this.gameOverScreen.setOnRestart(() => this.restartGame());
     this.pauseScreen.setOnResume(() => this.resumeGame());
     this.pauseScreen.setOnQuit(() => this.quitToMenu());
+
+    // Auto-pause when pointer lock is released on desktop (e.g. user presses ESC)
+    document.addEventListener('pointerlockchange', () => {
+      if (!document.pointerLockElement && this.state.isPlaying && !this.input.isMobileDevice) {
+        this.state.transition('PAUSED');
+        this.pauseScreen.show();
+        cancelAnimationFrame(this.animFrameId);
+      }
+    });
+
     this.startScreen.show();
     this.state._forceSet('MENU');
   }
@@ -140,8 +150,13 @@ export class Game {
       if (pu) this.powerUps.push(pu);
     });
     this.bus.on('enemyDamaged', (d) => this.enemyRenderer.flashDamage(d.id));
-    this.bus.on('waveStarted', (d) => this.hud.updateWave(d.wave));
-    this.bus.on('waveCompleted', () => { /* wave break — future: show countdown */ });
+    this.bus.on('waveStarted', (d) => {
+      this.hud.updateWave(d.wave);
+      this.hud.hideWaveBreak();
+    });
+    this.bus.on('waveCompleted', (d) => {
+      this.hud.showWaveBreak(d.wave + 1, GAME_CONFIG.waves.waveBreakDuration);
+    });
     this.bus.on('powerUpSpawned', (d) => {
       const pu = this.powerUps.find(p => p.id === d.id);
       if (pu) this.effects.createPowerUpMesh(pu);
@@ -154,15 +169,21 @@ export class Game {
     this.startScreen.hide();
     this.crosshair.show();
     this.hud.show();
+
+    // Give player all weapons at start
+    this.player = { ...this.player, ownedWeapons: ['PISTOL', 'RIFLE', 'SHOTGUN'] };
+    this.weapons.initWeapons(['PISTOL', 'RIFLE', 'SHOTGUN']);
+
     this.hud.updateHealth(this.player.health, this.player.maxHealth);
     this.hud.updateScore(0);
     this.hud.updateWave(1);
-    this.hud.updateWeapon('Pistol');
-    this.weapons.initWeapons(this.player.ownedWeapons);
+    this.hud.updateWeapon(getWeaponConfig(this.player.currentWeapon).name);
     const wp = this.weapons.getCurrentWeapon(this.player);
     if (wp) this.hud.updateAmmo(wp.currentAmmo, wp.reserveAmmo);
+
     if (this.input.isMobileDevice) {
       this.joystick.show(); this.lookController.show(); this.actionButtons.show();
+      this.hud.setMobileLayout();
     }
     this.prevWavePhase = 'spawning';
     this.prevWaveNumber = 1;
@@ -189,6 +210,7 @@ export class Game {
     this.enemies = []; this.powerUps = [];
     this.score = createScoreState(); this.wave = createWaveState();
     this.prevWavePhase = 'spawning'; this.prevWaveNumber = 1;
+    this.cameraYaw = 0; this.cameraPitch = 0;
     this.enemyRenderer.clear(); this.effects.clearPowerUps(); this.weapons.reset();
     this.gameOverScreen.hide();
     this.startGame();
@@ -211,6 +233,7 @@ export class Game {
     this.enemies = []; this.powerUps = [];
     this.score = createScoreState(); this.wave = createWaveState();
     this.prevWavePhase = 'spawning'; this.prevWaveNumber = 1;
+    this.cameraYaw = 0; this.cameraPitch = 0;
     this.enemyRenderer.clear(); this.effects.clearPowerUps(); this.weapons.reset();
     if (this.input.isMobileDevice) {
       this.joystick.hide(); this.lookController.hide(); this.actionButtons.hide();
@@ -257,7 +280,8 @@ export class Game {
       this.cameraPitch = Math.max(GAME_CONFIG.camera.minPitch, Math.min(GAME_CONFIG.camera.maxPitch, this.cameraPitch));
     }
 
-    if (snap.weaponSwitch !== 0) this.player = this.weapons.switchWeapon(this.player, snap.weaponSwitch);
+    if (snap.weaponSlot !== -1) this.player = this.weapons.switchToSlot(this.player, snap.weaponSlot);
+    else if (snap.weaponSwitch !== 0) this.player = this.weapons.switchWeapon(this.player, snap.weaponSwitch);
     if (snap.reload) this.weapons.tryReload(this.player);
     this.player = this.physics.updatePlayer(this.player, snap, dt, this.cameraYaw);
 
@@ -277,7 +301,6 @@ export class Game {
     const tickRes = this.combat.tickInvincibility(this.player, this.enemies, dt);
     this.player = tickRes.player; this.enemies = tickRes.enemies;
     this.player = tickPowerUps(this.player, dt);
-    this.player = tickInvincibility(this.player, dt);
 
     const spawnRes = this.spawner.trySpawnEnemy(this.wave, this.enemies.filter(isEnemyAlive), { x: this.player.position.x, z: this.player.position.z });
     this.wave = spawnRes.wave;
@@ -289,12 +312,19 @@ export class Game {
     if (this.wave.phase !== this.prevWavePhase) {
       if (this.wave.phase === 'break' && this.prevWavePhase === 'fighting') {
         this.bus.emit('waveCompleted', { wave: this.wave.waveNumber });
+        this.bus.emit('waveBreakStarted', { nextWave: this.wave.waveNumber + 1, duration: GAME_CONFIG.waves.waveBreakDuration });
       }
       this.prevWavePhase = this.wave.phase;
     }
     if (this.wave.waveNumber !== this.prevWaveNumber) {
+      this.bus.emit('waveBreakEnded', { wave: this.wave.waveNumber });
       this.prevWaveNumber = this.wave.waveNumber;
       this.bus.emit('waveStarted', { wave: this.wave.waveNumber, enemiesRemaining: this.wave.totalEnemiesThisWave });
+    }
+
+    // Keep wave break countdown ticking
+    if (this.wave.phase === 'break') {
+      this.hud.updateWaveBreak(this.wave.breakTimer);
     }
 
     this.score = tickCombo(this.score, now / 1000);

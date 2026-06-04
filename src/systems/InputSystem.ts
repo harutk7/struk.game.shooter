@@ -17,6 +17,8 @@ export interface InputSnapshot {
   reload: boolean;
   /** Whether weapon switch was requested (1=next, -1=prev, 0=none) */
   weaponSwitch: number;
+  /** Direct weapon slot selection (0=pistol, 1=rifle, 2=shotgun, -1=none) */
+  weaponSlot: number;
   /** Mouse/touch look delta (pixels) */
   lookX: number;
   lookY: number;
@@ -34,6 +36,7 @@ export function createEmptySnapshot(): InputSnapshot {
     shoot: false,
     reload: false,
     weaponSwitch: 0,
+    weaponSlot: -1,
     lookX: 0, lookY: 0,
     pointerLocked: false,
     pause: false,
@@ -69,6 +72,7 @@ export class InputSystem {
   private mouseButton0 = false;
   private pointerLocked = false;
   private weaponSwitchDir = 0;
+  private weaponSlot = -1;
 
   private keyBindings: Record<string, KeyAction>;
   private domElement: HTMLElement | null = null;
@@ -221,6 +225,7 @@ export class InputSystem {
 
     // Weapon switch
     snap.weaponSwitch = this.weaponSwitchDir;
+    snap.weaponSlot = this.weaponSlot;
 
     // Clear per-frame accumulators
     this.mouseDeltaX = 0;
@@ -228,6 +233,7 @@ export class InputSystem {
     this.mobileLookX = 0;
     this.mobileLookY = 0;
     this.weaponSwitchDir = 0;
+    this.weaponSlot = -1;
     this.keyJustPressed.clear();
 
     return snap;
@@ -256,9 +262,10 @@ export class InputSystem {
     }
     this.keyState.set(action, true);
 
-    // Weapon switch via number keys
-    if (e.code === 'Digit1') this.weaponSwitchDir = -1;
-    if (e.code === 'Digit2') this.weaponSwitchDir = 1;
+    // Direct weapon slot selection via number keys
+    if (e.code === 'Digit1') this.weaponSlot = 0;
+    if (e.code === 'Digit2') this.weaponSlot = 1;
+    if (e.code === 'Digit3') this.weaponSlot = 2;
   }
 
   private handleKeyUp(e: KeyboardEvent): void {

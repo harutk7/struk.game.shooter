@@ -3,7 +3,7 @@ import { PhysicsSystem } from '../systems/PhysicsSystem';
 import { createPlayer } from '../models/Player';
 import { createEnemy } from '../models/Enemy';
 
-const emptySnap = { moveX: 0, moveY: 0, sprint: false, jump: false, shoot: false, reload: false, weaponSwitch: 0, lookX: 0, lookY: 0, pointerLocked: true, pause: false };
+const emptySnap = { moveX: 0, moveY: 0, sprint: false, jump: false, shoot: false, reload: false, weaponSwitch: 0, weaponSlot: -1, lookX: 0, lookY: 0, pointerLocked: true, pause: false };
 
 describe('PhysicsSystem', () => {
   /* ── Arena clamping ── */
