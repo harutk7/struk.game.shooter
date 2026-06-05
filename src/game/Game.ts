@@ -46,6 +46,7 @@ import type { WavePhase } from '../models/WaveManager';
 import { createWaveState, tickWave, registerKill } from '../models/WaveManager';
 import { getWeaponConfig } from '../models/Weapon';
 import { getAudioManager } from '../audio/AudioManager';
+import { getWeaponSFX } from '../audio/WeaponSFX';
 
 export class Game {
   private _assetLoader = new AssetLoader();
@@ -482,6 +483,9 @@ export class Game {
         if (fr) {
           this.weaponRenderer.triggerMuzzleFlash(fr.weapon.type);
           this.weaponRenderer.ejectShell(cam.position, cam.quaternion);
+          // Per-weapon gunfire SFX (T14): distinct sound per weapon, randomized
+          // variant to avoid repetition fatigue.
+          getWeaponSFX().playGunshot(fr.weapon.type);
           // Per-weapon recoil: profile (camera/viewmodel spring) selected by
           // weapon type; magnitude/sway still come from the feel config.
           const feel = GAME_CONFIG.weaponFeel[fr.weapon.type];
@@ -709,12 +713,17 @@ export class Game {
         this.weaponRenderer.createTrail(origin, hit.point, true);
         this.weaponRenderer.createImpact(hit.point, hit.face?.normal);
         let hitFlesh = false;
+        let headshot = false;
+        // Head region sits ~0.7m+ above a humanoid's foot position (head group
+        // is at local y≈0.85 in both renderers). Used for the louder ding.
+        const HEAD_HEIGHT = 0.7;
         let obj: THREE.Object3D | null = hit.object;
         while (obj) {
           if (obj.userData.type === 'enemy') {
             hitFlesh = true;
             const eid = obj.userData.enemyId as string;
             const enemy = this.enemies.find(e => e.id === eid);
+            if (enemy) headshot = hit.point.y - enemy.position.y >= HEAD_HEIGHT;
             if (enemy && isEnemyAlive(enemy)) {
               const wp = this.weapons.getCurrentWeapon(this.player)!;
               const res = this.combat.processHit(wp, enemy, this.player);
@@ -727,6 +736,7 @@ export class Game {
             hitFlesh = true;
             const bid = obj.userData.botId as string;
             const bot = this.bots.find(b => b.id === bid);
+            if (bot) headshot = hit.point.y - bot.position.y >= HEAD_HEIGHT;
             if (bot && bot.isAlive) {
               const wp = this.weapons.getCurrentWeapon(this.player)!;
               const dmg = GAME_CONFIG.weapons[wp.type].damage;
@@ -755,6 +765,8 @@ export class Game {
         if (hitFlesh) {
           this.weaponRenderer.createBlood(hit.point, hit.face?.normal);
           this.crosshair.showHitMarker();
+          // Hit-marker "ding" (T14): louder on headshots than body shots.
+          getWeaponSFX().playHitMarker(headshot ? 'headshot' : 'body');
         }
         // Broadcast the gunshot for the bot AI to hear
         this.lastGunshotAt = { x: hit.point.x, z: hit.point.z, t: performance.now() };

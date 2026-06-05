@@ -1,6 +1,7 @@
 import { Game } from './game/Game';
 import { assetManifest } from './assets/assetManifest';
 import { getAudioManager } from './audio/AudioManager';
+import { getWeaponSFX } from './audio/WeaponSFX';
 
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('game-container');
@@ -31,6 +32,8 @@ document.addEventListener('DOMContentLoaded', () => {
     void audio.resume();
     void audio.loadSound('tick', `${base}sounds/tick.wav`).catch(() => {});
     void audio.loadSound('ping', `${base}sounds/ping.wav`).catch(() => {});
+    // Per-weapon gunfire + hit-marker SFX (T14).
+    void getWeaponSFX().loadAll(base);
   };
   window.addEventListener('pointerdown', initAudio);
   window.addEventListener('keydown', initAudio);

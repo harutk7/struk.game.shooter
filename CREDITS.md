@@ -53,7 +53,16 @@ number of files under `public/assets/` and `public/sounds/`.
 
 - **Ping SFX (placeholder)** — Source: Procedurally generated (scripts/gen_placeholder_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/ping.wav · Used in: T13 (AudioManager placeholder SFX)
 - **Tick SFX (placeholder)** — Source: Procedurally generated (scripts/gen_placeholder_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/tick.wav · Used in: T13 (AudioManager empty-click)
+- **Pistol gunshot 1** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/pistol_1.wav · Used in: T14 (gunfire SFX)
+- **Pistol gunshot 2** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/pistol_2.wav · Used in: T14 (gunfire SFX)
+- **Rifle gunshot 1** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/rifle_1.wav · Used in: T14 (gunfire SFX)
+- **Rifle gunshot 2** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/rifle_2.wav · Used in: T14 (gunfire SFX)
+- **Shotgun gunshot 1** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/shotgun_1.wav · Used in: T14 (gunfire SFX)
+- **Shotgun gunshot 2** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/shotgun_2.wav · Used in: T14 (gunfire SFX)
+- **Sniper gunshot 1** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/sniper_1.wav · Used in: T14 (gunfire SFX)
+- **Sniper gunshot 2** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/sniper_2.wav · Used in: T14 (gunfire SFX)
+- **Hit-marker ding** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/hitmarker.wav · Used in: T14 (hit-marker ding)
 
 ---
 
-_Last audited: 2026-06-05 (T12; audio entries added during realism-v2 integration). Asset count: 9 — all CC0 1.0 Universal._
+_Last audited: 2026-06-05 (T12; audio entries added during realism-v2 integration). Asset count: 18 — all CC0 1.0 Universal._
