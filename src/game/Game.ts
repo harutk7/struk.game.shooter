@@ -47,6 +47,7 @@ import { createWaveState, tickWave, registerKill } from '../models/WaveManager';
 import { getWeaponConfig } from '../models/Weapon';
 import { getAudioManager } from '../audio/AudioManager';
 import { getWeaponSFX } from '../audio/WeaponSFX';
+import { getFootstepSFX } from '../audio/FootstepSFX';
 
 export class Game {
   private _assetLoader = new AssetLoader();
@@ -94,6 +95,8 @@ export class Game {
   private horizontalSpeed = 0;
   // Throttle for empty-click SFX so a held trigger doesn't spam
   private lastEmptyClickAt = -10;
+  // Footstep + ambient soundscape (T15). Rate-limiting lives inside the SFX layer.
+  private footsteps = getFootstepSFX();
   // Track wave transitions so events are emitted exactly once
   private prevWavePhase: WavePhase = 'spawning';
   private prevWaveNumber = 1;
@@ -227,6 +230,17 @@ export class Game {
     });
   }
 
+  /**
+   * Preload footstep SFX and start the ambient bed (fades in over 2s). Called
+   * when a game/match begins — by then we're inside a user gesture, so the
+   * AudioContext is allowed to run. Idempotent and fire-and-forget.
+   */
+  private startSoundscape(): void {
+    const base = import.meta.env.BASE_URL ?? '/';
+    void this.footsteps.loadAll(base);
+    void this.footsteps.startAmbient();
+  }
+
   private startGame(): void {
     this.state.transition('PLAYING');
     this.input.lockPointer();
@@ -249,6 +263,7 @@ export class Game {
     }
     this.prevWavePhase = 'spawning';
     this.prevWaveNumber = 1;
+    this.startSoundscape();
     cancelAnimationFrame(this.animFrameId);
     this.lastTime = performance.now();
     this.loop();
@@ -315,6 +330,7 @@ export class Game {
 
     this.matchActive = true;
 
+    this.startSoundscape();
     cancelAnimationFrame(this.animFrameId);
     this.lastTime = performance.now();
     this.loop();
@@ -441,6 +457,9 @@ export class Game {
     if (isMoving) {
       // Phase advances proportional to actual ground speed
       this.walkPhase += dt * (isSprinting ? 12.0 : 8.0);
+      // Footstep SFX — the SFX layer rate-limits to one step per stride, so
+      // calling every frame while grounded + moving is safe (no spam).
+      if (this.player.isGrounded) this.footsteps.playPlayerFootstep('concrete');
     }
     // Snap previous position to detect first frame (avoid bob snap on respawn)
     void prevX; void prevZ;
@@ -664,6 +683,17 @@ export class Game {
         next = respawnBot(next, chosen);
         this.botRenderer.createMesh(next);
         this.bus.emit('botRespawned', { id: next.id, name: next.name, position: { x: chosen.x, z: chosen.z } });
+      }
+      // Footstep SFX for living, moving bots — 3D-panned so direction is
+      // audible. The SFX layer rate-limits per bot id. Skip the frame a bot
+      // respawns/teleports (only count steps while it was alive before & after).
+      if (next.isAlive && bot.isAlive) {
+        const dx = next.position.x - bot.position.x;
+        const dz = next.position.z - bot.position.z;
+        const botSpeed = Math.hypot(dx, dz) / Math.max(dt, 1e-3);
+        if (botSpeed > 0.5) {
+          this.footsteps.playBotFootstep(next.id, [next.position.x, next.position.y, next.position.z]);
+        }
       }
       // Track pending deaths (the bot just lost all health)
       if (bot.isAlive && !next.isAlive) {

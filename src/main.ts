@@ -2,6 +2,7 @@ import { Game } from './game/Game';
 import { assetManifest } from './assets/assetManifest';
 import { getAudioManager } from './audio/AudioManager';
 import { getWeaponSFX } from './audio/WeaponSFX';
+import { getFootstepSFX } from './audio/FootstepSFX';
 
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('game-container');
@@ -34,6 +35,8 @@ document.addEventListener('DOMContentLoaded', () => {
     void audio.loadSound('ping', `${base}sounds/ping.wav`).catch(() => {});
     // Per-weapon gunfire + hit-marker SFX (T14).
     void getWeaponSFX().loadAll(base);
+    // Preload footstep + ambient SFX (T15) so they're ready by match start.
+    void getFootstepSFX().loadAll(base).catch(() => {});
   };
   window.addEventListener('pointerdown', initAudio);
   window.addEventListener('keydown', initAudio);

@@ -62,7 +62,17 @@ number of files under `public/assets/` and `public/sounds/`.
 - **Sniper gunshot 1** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/sniper_1.wav · Used in: T14 (gunfire SFX)
 - **Sniper gunshot 2** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/weapons/sniper_2.wav · Used in: T14 (gunfire SFX)
 - **Hit-marker ding** — Source: Procedurally generated (scripts/gen_weapon_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/hitmarker.wav · Used in: T14 (hit-marker ding)
+- **Concrete footstep 1** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/footsteps/concrete_1.wav · Used in: T15 (footsteps)
+- **Concrete footstep 2** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/footsteps/concrete_2.wav · Used in: T15 (footsteps)
+- **Concrete footstep 3** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/footsteps/concrete_3.wav · Used in: T15 (footsteps)
+- **Concrete footstep 4** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/footsteps/concrete_4.wav · Used in: T15 (footsteps)
+- **Dirt footstep 1** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/footsteps/dirt_1.wav · Used in: T15 (footsteps)
+- **Dirt footstep 2** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/footsteps/dirt_2.wav · Used in: T15 (footsteps)
+- **Dirt footstep 3** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/footsteps/dirt_3.wav · Used in: T15 (footsteps)
+- **Dirt footstep 4** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/footsteps/dirt_4.wav · Used in: T15 (footsteps)
+- **Ambient hum bed** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/ambient/ambient_hum.wav · Used in: T15 (ambient soundscape)
+- **Ambient wind bed** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/ambient/ambient_wind.wav · Used in: T15 (ambient soundscape)
 
 ---
 
-_Last audited: 2026-06-05 (T12; audio entries added during realism-v2 integration). Asset count: 18 — all CC0 1.0 Universal._
+_Last audited: 2026-06-05 (T12; audio entries added during realism-v2 integration). Asset count: 28 — all CC0 1.0 Universal._
