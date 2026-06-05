@@ -145,6 +145,28 @@ export class SceneBuilder {
     }
   }
 
+  /**
+   * Load a Poly Haven .hdr file and return a PMREM-prefiltered env texture.
+   * Call this before constructing SceneBuilder, then pass the result as envMap.
+   * Requires a live WebGLRenderer (browser only).
+   */
+  static async loadHdriEnvMap(
+    renderer: THREE.WebGLRenderer,
+    url: string,
+  ): Promise<THREE.Texture> {
+    const { RGBELoader } = await import('three/examples/jsm/loaders/RGBELoader.js');
+    return new Promise<THREE.Texture>((resolve) => {
+      new RGBELoader().load(url, (hdrTex) => {
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        pmrem.compileEquirectangularShader();
+        const envMap = pmrem.fromEquirectangular(hdrTex).texture;
+        hdrTex.dispose();
+        pmrem.dispose();
+        resolve(envMap);
+      });
+    });
+  }
+
   // ─── Scene construction ───────────────────────────────────────────────────
 
   private createFloor(): void {
@@ -388,11 +410,13 @@ export class SceneBuilder {
     sunLight.shadow.mapSize.height = GAME_CONFIG.rendering.shadowMapSize;
     sunLight.shadow.camera.near = 0.5;
     sunLight.shadow.camera.far = 150;
-    sunLight.shadow.camera.left = -50;
-    sunLight.shadow.camera.right = 50;
-    sunLight.shadow.camera.top = 50;
-    sunLight.shadow.camera.bottom = -50;
-    sunLight.shadow.bias = -0.0001;
+    sunLight.shadow.camera.left = -30;
+    sunLight.shadow.camera.right = 30;
+    sunLight.shadow.camera.top = 30;
+    sunLight.shadow.camera.bottom = -30;
+    sunLight.shadow.bias = -0.0005;
+    sunLight.shadow.normalBias = 0.02;
+    sunLight.shadow.radius = 3;
     this.scene.add(sunLight);
 
     const fillLight = new THREE.DirectionalLight(fill.color, fill.intensity);
@@ -416,6 +440,9 @@ export class SceneBuilder {
       this.scene.add(fixture);
       this.meshes.push(fixture);
     }
+
+    const { fogColor, fogNear, fogFar } = GAME_CONFIG.rendering;
+    this.scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
   }
 
   dispose(): void {

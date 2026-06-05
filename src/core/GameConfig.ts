@@ -251,17 +251,17 @@ export const GAME_CONFIG = {
     shadowType: 'PCFSoft' as const,
     antialias: true,
     pixelRatio: Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2),
-    fogColor: 0x87ceeb,
-    fogNear: 10,
+    fogColor: 0xc8d0d8,
+    fogNear: 30,
     fogFar: 120,
   },
 
   /** Lighting */
   lighting: {
-    ambient: { color: 0x6688cc, intensity: 0.4 },
+    ambient: { color: 0x6688cc, intensity: 0.3 },
     hemisphere: { sky: 0x87ceeb, ground: 0x444444, intensity: 0.5 },
     sun: { color: 0xffffcc, intensity: 1.2, position: [30, 50, 30] as const },
-    fill: { color: 0x8888ff, intensity: 0.3, position: [-20, 30, -20] as const },
+    fill: { color: 0x8888ff, intensity: 0.3, position: [-30, 20, -30] as const },
   },
 } as const;
 

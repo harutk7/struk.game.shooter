@@ -267,8 +267,18 @@ declare module 'three' {
       mapSize: { width: number; height: number };
       camera: { near: number; far: number; left: number; right: number; top: number; bottom: number };
       bias: number;
+      normalBias: number;
+      radius: number;
     };
     constructor(color?: number, intensity?: number);
+  }
+
+  export class PMREMGenerator {
+    constructor(renderer: WebGLRenderer);
+    compileEquirectangularShader(): void;
+    fromEquirectangular(texture: Texture): { texture: Texture };
+    fromScene(scene: Scene, sigma?: number, near?: number, far?: number): { texture: Texture };
+    dispose(): void;
   }
 
   export class PointLight extends Object3D {
@@ -302,12 +312,6 @@ declare module 'three' {
     ): Texture;
   }
 
-  export class PMREMGenerator {
-    constructor(renderer: WebGLRenderer);
-    fromScene(scene: Scene, sigma?: number, near?: number, far?: number): { texture: Texture };
-    dispose(): void;
-  }
-
   export const MathUtils: {
     degToRad(degrees: number): number;
     radToDeg(radians: number): number;
@@ -324,4 +328,11 @@ declare module 'three' {
   export const RepeatWrapping: number;
   export const NearestFilter: number;
   export const LinearFilter: number;
+}
+
+declare module 'three/examples/jsm/loaders/RGBELoader.js' {
+  import * as THREE from 'three';
+  export class RGBELoader {
+    load(url: string, onLoad: (texture: THREE.Texture) => void): void;
+  }
 }
