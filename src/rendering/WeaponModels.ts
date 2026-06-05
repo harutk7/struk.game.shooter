@@ -12,6 +12,127 @@
 
 import * as THREE from 'three';
 import type { WeaponType } from '../models/Weapon';
+import { AssetLoader } from '../assets/AssetLoader';
+
+// ── glTF weapon models (T7) ───────────────────────────────────────────────────
+//
+// Each in-game weapon type maps to a CC0 low-poly glTF model fetched into
+// public/assets/weapons/ by scripts/fetch_assets.mjs. The procedural box models
+// below are KEPT as a fallback: buildWeaponModel() always returns a procedural
+// group immediately, then asynchronously swaps in the glTF once it loads. If the
+// glTF fails to load (404, parse error, headless test), the procedural model
+// stays — the game never breaks.
+//
+// `targetLength` is the desired world-space size of the model's longest axis, in
+// metres, chosen to roughly match the original procedural silhouette so the gun
+// doesn't appear huge or tiny in the player's hands.
+
+interface WeaponGLTFConfig {
+  url: string;
+  targetLength: number;
+}
+
+const WEAPON_GLTF: Record<WeaponType, WeaponGLTFConfig> = {
+  PISTOL:  { url: '/assets/weapons/pistol.glb',  targetLength: 0.24 },
+  RIFLE:   { url: '/assets/weapons/rifle.glb',   targetLength: 0.62 },
+  SHOTGUN: { url: '/assets/weapons/shotgun.glb', targetLength: 0.70 },
+  SNIPER:  { url: '/assets/weapons/sniper.glb',  targetLength: 0.85 },
+};
+
+// Shared, lazily-created loader. Tests inject a mock via setWeaponAssetLoader().
+let weaponLoader: AssetLoader | null = null;
+
+function getWeaponLoader(): AssetLoader {
+  if (!weaponLoader) weaponLoader = new AssetLoader();
+  return weaponLoader;
+}
+
+/** Override the AssetLoader used to fetch weapon glTF models (test hook). */
+export function setWeaponAssetLoader(loader: AssetLoader | null): void {
+  weaponLoader = loader;
+}
+
+/** Count descendant meshes of an object (a loaded glTF scene or fallback). */
+function countMeshes(obj: THREE.Object3D): number {
+  let n = 0;
+  obj.traverse((o: THREE.Object3D) => {
+    if ((o as THREE.Mesh).isMesh) n++;
+  });
+  return n;
+}
+
+/**
+ * Normalise a loaded glTF scene so it visually replaces the procedural model:
+ *   - uniformly scaled so its longest axis equals `targetLength` metres,
+ *   - re-oriented so its longest axis lies along Z (the firing axis) and it is
+ *     recentred on its own bounding box,
+ *   - every mesh casts shadows.
+ *
+ * Robust to degenerate/empty geometry (mocked meshes in tests): if the bounding
+ * box is zero-sized or non-finite, scaling/orienting is skipped.
+ */
+function prepareGLTFModel(scene: THREE.Object3D, type: WeaponType): THREE.Group {
+  const wrapper = new THREE.Group();
+  wrapper.name = `${type}_GLTF`;
+
+  scene.traverse((o: THREE.Object3D) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh) m.castShadow = true;
+  });
+
+  const box = new THREE.Box3().setFromObject(scene);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+
+  const dims = [size.x, size.y, size.z];
+  const longest = Math.max(dims[0], dims[1], dims[2]);
+  const finite = Number.isFinite(longest) && longest > 1e-6 &&
+    Number.isFinite(center.x) && Number.isFinite(center.y) && Number.isFinite(center.z);
+
+  // Recentre the model on its bounding-box centre so it pivots about itself.
+  if (finite) scene.position.set(-center.x, -center.y, -center.z);
+
+  // Re-orient: if the longest axis is X (typical for these Quaternius models),
+  // rotate +90° about Y so the barrel runs along Z like the procedural models.
+  const inner = new THREE.Group();
+  inner.add(scene);
+  if (finite && size.x >= size.y && size.x >= size.z) {
+    inner.rotation.y = Math.PI / 2;
+  }
+
+  if (finite) {
+    const cfg = WEAPON_GLTF[type];
+    const s = cfg.targetLength / longest;
+    wrapper.scale.set(s, s, s);
+  }
+
+  wrapper.add(inner);
+  return wrapper;
+}
+
+/**
+ * Try to load the glTF model for `type` and, on success, replace the procedural
+ * children of `group` with it. On any failure the procedural model is left in
+ * place. Fire-and-forget; safe to ignore the returned promise.
+ */
+function enhanceWithGLTF(group: THREE.Group, type: WeaponType): Promise<void> {
+  const cfg = WEAPON_GLTF[type];
+  return getWeaponLoader().loadGLTF(cfg.url).then((gltf) => {
+    const scene = gltf.scene;
+    if (!scene || countMeshes(scene) === 0) return; // keep procedural fallback
+    const model = prepareGLTFModel(scene, type);
+    // Drop procedural geometry, keep the group's transform/orientation.
+    for (const child of [...group.children]) {
+      group.remove(child);
+      disposeWeaponModel(child);
+    }
+    group.add(model);
+  }).catch(() => {
+    // Network/parse error — procedural model already in place.
+  });
+}
 
 const MAT = {
   steel: () => new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.4, metalness: 0.7 }),
@@ -272,19 +393,53 @@ function buildSniper(): THREE.Group {
   return g;
 }
 
-/** Build a model for the given weapon type, with an optional camo pattern. */
-export function buildWeaponModel(type: WeaponType, camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none'): THREE.Group {
-  let g: THREE.Group;
+/** Build the procedural (box-geometry) model for a weapon type. */
+function buildProceduralModel(type: WeaponType): THREE.Group {
   switch (type) {
-    case 'PISTOL':  g = buildPistol(); break;
-    case 'RIFLE':   g = buildRifle(); break;
-    case 'SHOTGUN': g = buildShotgun(); break;
-    case 'SNIPER':  g = buildSniper(); break;
-    default:        g = buildPistol();
+    case 'PISTOL':  return buildPistol();
+    case 'RIFLE':   return buildRifle();
+    case 'SHOTGUN': return buildShotgun();
+    case 'SNIPER':  return buildSniper();
+    default:        return buildPistol();
   }
+}
+
+/**
+ * Build a model for the given weapon type, with an optional camo pattern.
+ *
+ * Returns a procedural group SYNCHRONOUSLY (so existing call sites are
+ * unchanged) and then asynchronously swaps in the CC0 glTF model once it
+ * loads. If the glTF fails to load, the procedural model stays as a fallback.
+ */
+export function buildWeaponModel(type: WeaponType, camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none'): THREE.Group {
+  const g = buildProceduralModel(type);
   if (camo !== 'none') applyCamo(g, camo);
+  void enhanceWithGLTF(g, type);
   return g;
 }
+
+/**
+ * Asynchronously build a weapon model, preferring the CC0 glTF model and
+ * falling back to the procedural box model if it fails to load. Resolves once
+ * the model (glTF or fallback) is ready. The returned group keeps the same
+ * outer transform/scale (1,1,1) as the procedural version — the glTF is scaled
+ * on an inner wrapper — so it drops into the existing anchor structure.
+ */
+export async function loadWeaponModel(
+  type: WeaponType,
+  camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none',
+): Promise<THREE.Group> {
+  const g = buildProceduralModel(type);
+  if (camo !== 'none') applyCamo(g, camo);
+  await enhanceWithGLTF(g, type);
+  return g;
+}
+
+/** Convenience async builders, one per weapon type (see loadWeaponModel). */
+export const createPistol  = (camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none') => loadWeaponModel('PISTOL', camo);
+export const createRifle   = (camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none') => loadWeaponModel('RIFLE', camo);
+export const createShotgun = (camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none') => loadWeaponModel('SHOTGUN', camo);
+export const createSniper  = (camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none') => loadWeaponModel('SNIPER', camo);
 
 /** Dispose all materials/geometries inside a weapon model. */
 export function disposeWeaponModel(model: THREE.Object3D): void {

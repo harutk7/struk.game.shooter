@@ -67,6 +67,8 @@ declare module 'three' {
     constructor(min?: Vector3, max?: Vector3);
     min: Vector3; max: Vector3;
     setFromObject(obj: Object3D): this;
+    getSize(target: Vector3): Vector3;
+    getCenter(target: Vector3): Vector3;
   }
 
   export class Raycaster {
@@ -238,6 +240,7 @@ declare module 'three' {
     material: Material | Material[];
     castShadow: boolean;
     receiveShadow: boolean;
+    readonly isMesh: boolean;
     constructor(geometry?: BufferGeometry, material?: Material | Material[]);
   }
 
