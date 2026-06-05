@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { EventBus } from '../core/EventBus';
 import type { GameEvents } from '../core/GameEvents';
+import { AssetLoader } from '../assets/AssetLoader';
 import { GameState } from '../core/GameState';
 import { GAME_CONFIG } from '../core/GameConfig';
 import { InputSystem } from '../systems/InputSystem';
@@ -46,6 +47,7 @@ import { createWaveState, tickWave, registerKill } from '../models/WaveManager';
 import { getWeaponConfig } from '../models/Weapon';
 
 export class Game {
+  private _assetLoader = new AssetLoader();
   private bus = new EventBus<GameEvents>();
   private state = new GameState();
   private input: InputSystem;
@@ -862,6 +864,10 @@ export class Game {
         if (isPowerUpExpired(p)) { this.effects.removePowerUpMesh(p.id); return false; }
         return true;
       });
+  }
+
+  get assetLoader(): AssetLoader {
+    return this._assetLoader;
   }
 
   dispose(): void {
