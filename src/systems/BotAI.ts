@@ -19,8 +19,56 @@
 
 import { GAME_CONFIG } from '../core/GameConfig';
 import type { BotData } from '../models/Bot';
+import { BotPathfinding, type Point } from './BotPathfinding';
 
 const TWO_PI = Math.PI * 2;
+
+// ── Pathfinding state (module-level) ───────────────────────────────────────
+// The arena colliders are static, so the grid is built ONCE per collider set
+// and the same pathfinder is reused across every bot and tick. Per-bot path
+// state (current waypoint, plan age, the player position we planned for) is
+// keyed by bot id so `tickBot` can stay a per-bot function.
+
+let _pathfinder: BotPathfinding | null = null;
+let _pathfinderColliders: BotWorldSnapshot['obstacles'] | null = null;
+
+/** Get (or lazily build) the pathfinder for the current static collider set. */
+function getPathfinder(obstacles: BotWorldSnapshot['obstacles']): BotPathfinding {
+  if (_pathfinder && _pathfinderColliders === obstacles) return _pathfinder;
+  _pathfinder = new BotPathfinding(obstacles, {
+    width: GAME_CONFIG.arena.width,
+    depth: GAME_CONFIG.arena.depth,
+  });
+  _pathfinderColliders = obstacles;
+  return _pathfinder;
+}
+
+interface BotPathState {
+  /** Simplified waypoint list (world XZ). */
+  path: Point[];
+  /** Index of the waypoint we are currently steering toward. */
+  index: number;
+  /** Player position at plan time — replan when the player drifts from it. */
+  plannedTarget: { x: number; z: number };
+  /** Seconds since the path was planned. */
+  ageSec: number;
+}
+
+const _pathStates = new Map<string, BotPathState>();
+
+/** How far (m) the player may drift from the plan target before we replan. */
+const REPLAN_PLAYER_DRIFT = 3.0;
+/** Max plan age (s) before a forced replan. */
+const REPLAN_MAX_AGE = 2.0;
+/** Distance (m) at which a waypoint counts as reached. */
+const WAYPOINT_REACHED = 0.6;
+
+/** Reset all pathfinding caches/state (for tests and match restarts). */
+export function _resetPathfindingState(): void {
+  _pathfinder = null;
+  _pathfinderColliders = null;
+  _pathStates.clear();
+}
 
 function wrapAngle(a: number): number {
   // Normalize to [-PI, PI]
@@ -227,6 +275,67 @@ function rollStrafeDir(): -1 | 1 {
   return Math.random() < 0.5 ? -1 : 1;
 }
 
+/**
+ * Engage-state movement when the direct line to the player is blocked: maintain
+ * (or replan) an A* detour around the obstacles and step toward the next
+ * waypoint. Replans when the plan ages out, the player drifts off the planned
+ * target, or the path has been fully consumed.
+ */
+function followDetour(
+  bot: BotData,
+  world: BotWorldSnapshot,
+  dt: number,
+  arena: { width: number; depth: number },
+): { x: number; y: number; z: number } {
+  const pf = getPathfinder(world.obstacles);
+  const player = world.playerPosition;
+
+  let st = _pathStates.get(bot.id);
+  const needReplan =
+    !st
+    || st.ageSec >= REPLAN_MAX_AGE
+    || st.index >= st.path.length
+    || dist2D(st.plannedTarget, player) > REPLAN_PLAYER_DRIFT;
+
+  let plan: BotPathState;
+  if (needReplan) {
+    const path = pf.findPath([bot.position.x, bot.position.z], [player.x, player.z]);
+    plan = {
+      path,
+      index: path.length > 1 ? 1 : 0,
+      plannedTarget: { x: player.x, z: player.z },
+      ageSec: 0,
+    };
+    _pathStates.set(bot.id, plan);
+  } else {
+    plan = st!;
+    plan.ageSec += dt;
+  }
+
+  if (plan.path.length === 0) return { ...bot.position };
+
+  // Advance past any waypoints we have effectively reached.
+  let wp = plan.path[Math.min(plan.index, plan.path.length - 1)];
+  while (
+    plan.index < plan.path.length - 1
+    && dist2D(bot.position, { x: wp[0], z: wp[1] }) < WAYPOINT_REACHED
+  ) {
+    plan.index++;
+    wp = plan.path[plan.index];
+  }
+
+  const r = moveToward(
+    bot,
+    { x: wp[0], z: wp[1] },
+    GAME_CONFIG.bots.patrol.runSpeed,
+    dt,
+    world.obstacles,
+    world.otherBots,
+    arena,
+  );
+  return r.newPos;
+}
+
 /** Main per-tick AI update. */
 export function tickBot(
   bot: BotData,
@@ -356,28 +465,41 @@ export function tickBot(
       break;
     }
     case 'engage': {
-      // Face the player; strafe while shooting
+      // Always face the player.
       const dpx = world.playerPosition.x - next.position.x;
       const dpz = world.playerPosition.z - next.position.z;
       yawTarget = Math.atan2(dpz, dpx);
 
-      // Strafe direction
-      next.strafeTimer -= dt;
-      if (next.strafeTimer <= 0) {
-        next.strafeDir = Math.random() < diff.strafeProb ? rollStrafeDir() : 0;
-        next.strafeTimer = 0.4 + Math.random() * 0.6;
+      // Is the direct line to the player blocked by an obstacle?
+      const directClear = hasLineOfSight(
+        { x: next.position.x, y: 1.5, z: next.position.z },
+        { x: world.playerPosition.x, y: 1.5, z: world.playerPosition.z },
+        world.obstacles,
+      );
+
+      if (directClear) {
+        // ── Clear line: engage directly (strafe in place while shooting) ──
+        _pathStates.delete(next.id); // drop any stale detour
+        next.strafeTimer -= dt;
+        if (next.strafeTimer <= 0) {
+          next.strafeDir = Math.random() < diff.strafeProb ? rollStrafeDir() : 0;
+          next.strafeTimer = 0.4 + Math.random() * 0.6;
+        }
+        // Strafe perpendicular to the line-of-sight.
+        const perpX = -Math.sin(yawTarget);
+        const perpZ = Math.cos(yawTarget);
+        const strafeSpeed = 1.2;
+        const stepX = perpX * next.strafeDir * strafeSpeed * dt;
+        const stepZ = perpZ * next.strafeDir * strafeSpeed * dt;
+        newPos = {
+          x: next.position.x + stepX,
+          y: next.position.y,
+          z: next.position.z + stepZ,
+        };
+      } else {
+        // ── Blocked: A* a detour around the obstacles and follow it ──
+        newPos = followDetour(next, world, dt, arena);
       }
-      // Strafe perpendicular to the line-of-sight
-      const perpX = -Math.sin(yawTarget);
-      const perpZ = Math.cos(yawTarget);
-      const strafeSpeed = 1.2;
-      const stepX = perpX * next.strafeDir * strafeSpeed * dt;
-      const stepZ = perpZ * next.strafeDir * strafeSpeed * dt;
-      newPos = {
-        x: next.position.x + stepX,
-        y: next.position.y,
-        z: next.position.z + stepZ,
-      };
 
       break;
     }
