@@ -449,8 +449,8 @@ export class Game {
     const fpv = GAME_CONFIG.fpv;
     const eyeH = fpv.eyeHeight * (isCrouching ? fpv.crouchEyeHeightMul : 1.0);
     const bob = isMoving
-      ? this.playerBody.tick({ dt, isMoving, isCrouching, isSprinting, walkPhase: this.walkPhase })
-      : this.playerBody.tick({ dt, isMoving: false, isCrouching, isSprinting, walkPhase: this.walkPhase });
+      ? this.playerBody.tick({ dt, isMoving, isCrouching, isSprinting, walkPhase: this.walkPhase, cameraPitch: this.cameraPitch, cameraYaw: this.cameraYaw })
+      : this.playerBody.tick({ dt, isMoving: false, isCrouching, isSprinting, walkPhase: this.walkPhase, cameraPitch: this.cameraPitch, cameraYaw: this.cameraYaw });
     cam.position.set(
       this.player.position.x + bob.bobX,
       this.player.position.y + eyeH + bob.bobY,
