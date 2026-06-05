@@ -45,6 +45,7 @@ import type { WaveState } from '../models/WaveManager';
 import type { WavePhase } from '../models/WaveManager';
 import { createWaveState, tickWave, registerKill } from '../models/WaveManager';
 import { getWeaponConfig } from '../models/Weapon';
+import { getAudioManager } from '../audio/AudioManager';
 
 export class Game {
   private _assetLoader = new AssetLoader();
@@ -92,8 +93,6 @@ export class Game {
   private horizontalSpeed = 0;
   // Throttle for empty-click SFX so a held trigger doesn't spam
   private lastEmptyClickAt = -10;
-  // Cached AudioContext for the empty-click SFX (lazy-initialized)
-  private audioCtx: AudioContext | null = null;
   // Track wave transitions so events are emitted exactly once
   private prevWavePhase: WavePhase = 'spawning';
   private prevWaveNumber = 1;
@@ -141,6 +140,7 @@ export class Game {
     }
 
     this.wireEvents();
+    this.hud.setOnMasterVolumeChange((v) => getAudioManager().setMasterVolume(v));
     this.startScreen.setOnClick(() => this.startGame());
     this.startScreen.setOnDeathmatchClick(() => this.startDeathmatch());
     this.gameOverScreen.setOnRestart(() => this.restartGame());
@@ -768,50 +768,12 @@ export class Game {
   }
 
   /**
-   * Play a synthesized "empty click" via the Web Audio API.
-   * No audio file required — pure oscillator + noise burst.
+   * Play the "empty click" SFX through the shared AudioManager.
+   * Routed through the 'tick' placeholder sound (loaded on first gesture in
+   * main.ts). No-ops gracefully if audio isn't ready yet.
    */
   private playEmptyClickSfx(): void {
-    try {
-      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (!Ctx) return;
-      const ctx: AudioContext = this.audioCtx || new Ctx();
-      this.audioCtx = ctx;
-      if (ctx.state === 'suspended') ctx.resume();
-
-      const now = ctx.currentTime;
-      // Click 1: very short noise burst
-      const bufferSize = Math.floor(0.05 * ctx.sampleRate);
-      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.1));
-      }
-      const noise = ctx.createBufferSource();
-      noise.buffer = buffer;
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.25, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'highpass';
-      filter.frequency.value = 2000;
-      noise.connect(filter).connect(gain).connect(ctx.destination);
-      noise.start(now);
-      noise.stop(now + 0.06);
-
-      // Click 2: brief tone for the "click" of the trigger
-      const osc = ctx.createOscillator();
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(900, now);
-      const g2 = ctx.createGain();
-      g2.gain.setValueAtTime(0.08, now);
-      g2.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
-      osc.connect(g2).connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.05);
-    } catch {
-      // Audio not available; fail silently.
-    }
+    getAudioManager().play('tick', { category: 'sfx', volume: 0.8 });
   }
 
   /** Show the match-over screen (uses the existing GameOverScreen). */

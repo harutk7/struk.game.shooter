@@ -51,10 +51,9 @@ number of files under `public/assets/` and `public/sounds/`.
 
 ## Audio
 
-<!-- No audio assets are committed yet. Sound effects are introduced in T13–T15
-     (AudioManager + SFX). When a sound is added under public/sounds/, append a
-     one-line entry here following the Entry format above. -->
+- **Ping SFX (placeholder)** — Source: Procedurally generated (scripts/gen_placeholder_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/ping.wav · Used in: T13 (AudioManager placeholder SFX)
+- **Tick SFX (placeholder)** — Source: Procedurally generated (scripts/gen_placeholder_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/tick.wav · Used in: T13 (AudioManager empty-click)
 
 ---
 
-_Last audited: 2026-06-05 (T12). Asset count: 7 — all CC0 1.0 Universal._
+_Last audited: 2026-06-05 (T12; audio entries added during realism-v2 integration). Asset count: 9 — all CC0 1.0 Universal._

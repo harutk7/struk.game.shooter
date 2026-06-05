@@ -1,5 +1,6 @@
 import { Game } from './game/Game';
 import { assetManifest } from './assets/assetManifest';
+import { getAudioManager } from './audio/AudioManager';
 
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('game-container');
@@ -17,4 +18,20 @@ document.addEventListener('DOMContentLoaded', () => {
   } catch (err) {
     console.error('Failed to initialize game:', err);
   }
+
+  // The browser autoplay policy forbids creating/resuming an AudioContext
+  // outside a user gesture, so we lazily initialize the AudioManager on the
+  // first click or keypress and preload the placeholder SFX.
+  let audioInitialized = false;
+  const initAudio = () => {
+    if (audioInitialized) return;
+    audioInitialized = true;
+    const audio = getAudioManager();
+    const base = import.meta.env.BASE_URL ?? '/';
+    void audio.resume();
+    void audio.loadSound('tick', `${base}sounds/tick.wav`).catch(() => {});
+    void audio.loadSound('ping', `${base}sounds/ping.wav`).catch(() => {});
+  };
+  window.addEventListener('pointerdown', initAudio);
+  window.addEventListener('keydown', initAudio);
 });
