@@ -15,6 +15,12 @@ export interface AssetManifest {
 
 export const assetManifest: AssetManifest = {
   weapons: [],
-  textures: [],
+  textures: [
+    {
+      name: 'concrete_floor_diff',
+      url: '/assets/concrete_floor_02_diff_1k.jpg',
+      license: 'CC0',
+    },
+  ],
   audio: [],
 };

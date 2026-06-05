@@ -7,13 +7,22 @@ import * as THREE from 'three';
 import { GAME_CONFIG } from '../core/GameConfig';
 import type { AABBCollider } from '../systems/PhysicsSystem';
 
+const FLOOR_TEXTURE_URL = '/assets/concrete_floor_02_diff_1k.jpg';
+const FLOOR_TEXTURE_REPEAT = 8;
+
+export interface FloorTextureLoader {
+  load(url: string): THREE.Texture;
+}
+
 export class SceneBuilder {
   private scene: THREE.Scene;
+  private textureLoader: FloorTextureLoader;
   private colliders: AABBCollider[] = [];
   private meshes: THREE.Object3D[] = [];
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, textureLoader?: FloorTextureLoader) {
     this.scene = scene;
+    this.textureLoader = textureLoader ?? new THREE.TextureLoader();
   }
 
   build(): AABBCollider[] {
@@ -39,10 +48,43 @@ export class SceneBuilder {
     }
     geometry.computeVertexNormals();
 
+    // Subtle vertex-color noise overlay (~0.02 amplitude) for macro surface variation
+    const colorData = new Float32Array(positions.count * 3);
+    for (let i = 0; i < positions.count; i++) {
+      const n = 1.0 + (Math.random() - 0.5) * 0.04;
+      colorData[i * 3] = n;
+      colorData[i * 3 + 1] = n;
+      colorData[i * 3 + 2] = n;
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colorData, 3));
+
+    // PBR concrete diffuse — tiled 8×8 across the 50m arena
+    const diffuseMap = this.textureLoader.load(FLOOR_TEXTURE_URL);
+    diffuseMap.wrapS = THREE.RepeatWrapping;
+    diffuseMap.wrapT = THREE.RepeatWrapping;
+    diffuseMap.repeat.set(FLOOR_TEXTURE_REPEAT, FLOOR_TEXTURE_REPEAT);
+
+    // Normal map reuses diffuse texture as a surface-detail stand-in
+    const normalMap = this.textureLoader.load(FLOOR_TEXTURE_URL);
+    normalMap.wrapS = THREE.RepeatWrapping;
+    normalMap.wrapT = THREE.RepeatWrapping;
+    normalMap.repeat.set(FLOOR_TEXTURE_REPEAT, FLOOR_TEXTURE_REPEAT);
+
+    // AO map — grayscale of diffuse acts as an occlusion proxy for creases/pores
+    const aoMap = this.textureLoader.load(FLOOR_TEXTURE_URL);
+    aoMap.wrapS = THREE.RepeatWrapping;
+    aoMap.wrapT = THREE.RepeatWrapping;
+    aoMap.repeat.set(FLOOR_TEXTURE_REPEAT, FLOOR_TEXTURE_REPEAT);
+
     const material = new THREE.MeshStandardMaterial({
-      color: 0x2d5a27,
-      roughness: 0.9,
-      metalness: 0.1,
+      map: diffuseMap,
+      normalMap,
+      roughnessMap: diffuseMap,
+      aoMap,
+      aoMapIntensity: 0.5,
+      roughness: 1.0,
+      metalness: 0.0,
+      vertexColors: true,
     });
 
     const floor = new THREE.Mesh(geometry, material);

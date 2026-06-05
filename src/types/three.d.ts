@@ -1,6 +1,30 @@
 /* Ambient type declarations for Three.js 0.173 */
 
+declare module 'three/examples/jsm/environments/RoomEnvironment.js' {
+  import * as THREE from 'three';
+  export class RoomEnvironment extends THREE.Scene {
+    constructor();
+    dispose(): void;
+  }
+}
+
 declare module 'three' {
+  export class Vector2 {
+    constructor(x?: number, y?: number);
+    x: number; y: number;
+    set(x: number, y: number): this;
+  }
+
+  export class BufferAttribute {
+    constructor(array: Float32Array | Uint16Array | Uint32Array, itemSize: number);
+    count: number;
+    itemSize: number;
+    array: Float32Array | Uint16Array | Uint32Array;
+    getX(i: number): number;
+    getY(i: number): number;
+    setZ(i: number, v: number): void;
+  }
+
   export class Vector3 {
     constructor(x?: number, y?: number, z?: number);
     x: number; y: number; z: number;
@@ -94,6 +118,7 @@ declare module 'three' {
 
   export class Scene extends Object3D {
     fog: Fog | null;
+    environment: Texture | null;
   }
 
   export class Fog {
@@ -114,7 +139,12 @@ declare module 'three' {
   }
 
   export class BufferGeometry {
-    attributes: { position: { count: number; getX(i: number): number; getY(i: number): number; setZ(i: number, v: number): void } };
+    attributes: {
+      position: BufferAttribute & { count: number; getX(i: number): number; getY(i: number): number; setZ(i: number, v: number): void };
+      uv?: BufferAttribute;
+      color?: BufferAttribute;
+    };
+    setAttribute(name: string, attribute: BufferAttribute): this;
     setFromPoints(points: Vector3[]): this;
     computeVertexNormals(): void;
     dispose(): void;
@@ -159,6 +189,12 @@ declare module 'three' {
     emissiveIntensity: number;
     map: Texture | null;
     needsUpdate: boolean;
+    normalMap: Texture | null;
+    roughnessMap: Texture | null;
+    aoMap: Texture | null;
+    aoMapIntensity: number;
+    envMap: Texture | null;
+    vertexColors: boolean;
     constructor(params?: Record<string, any>);
   }
 
@@ -243,17 +279,33 @@ declare module 'three' {
   }
 
   export class Texture {
-    constructor(canvas?: HTMLCanvasElement);
-    dispose(): void;
+    constructor(image?: HTMLCanvasElement | null);
     wrapS: number;
     wrapT: number;
-    repeat: { x: number; y: number; set(x: number, y: number): void };
+    repeat: Vector2;
+    needsUpdate: boolean;
     magFilter: number;
     minFilter: number;
+    dispose(): void;
   }
 
   export class CanvasTexture extends Texture {
     constructor(canvas: HTMLCanvasElement);
+  }
+
+  export class TextureLoader {
+    load(
+      url: string,
+      onLoad?: (texture: Texture) => void,
+      onProgress?: (event: ProgressEvent) => void,
+      onError?: (err: unknown) => void,
+    ): Texture;
+  }
+
+  export class PMREMGenerator {
+    constructor(renderer: WebGLRenderer);
+    fromScene(scene: Scene, sigma?: number, near?: number, far?: number): { texture: Texture };
+    dispose(): void;
   }
 
   export const MathUtils: {
