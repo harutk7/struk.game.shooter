@@ -456,7 +456,15 @@ export class Game {
       this.player.position.y + eyeH + bob.bobY,
       this.player.position.z,
     );
-    const euler = new THREE.Euler(this.cameraPitch, this.cameraYaw, 0, 'YXZ');
+    // Spring-damped recoil kick is layered on top of the player's aim as a
+    // transient offset (it does not accumulate into cameraPitch/cameraYaw).
+    const recoil = this.playerBody.getCameraRecoil();
+    const euler = new THREE.Euler(
+      this.cameraPitch + recoil.pitch,
+      this.cameraYaw + recoil.yaw,
+      0,
+      'YXZ',
+    );
     cam.quaternion.setFromEuler(euler);
 
     if (snap.shoot) {
@@ -474,9 +482,10 @@ export class Game {
         if (fr) {
           this.weaponRenderer.triggerMuzzleFlash(fr.weapon.type);
           this.weaponRenderer.ejectShell(cam.position, cam.quaternion);
-          // Per-weapon recoil feel from config
+          // Per-weapon recoil: profile (camera/viewmodel spring) selected by
+          // weapon type; magnitude/sway still come from the feel config.
           const feel = GAME_CONFIG.weaponFeel[fr.weapon.type];
-          this.playerBody.addRecoil(feel.kick, feel.sway);
+          this.playerBody.addRecoil(fr.weapon.type, feel.kick, feel.sway);
           this.crosshair.setRecoilKick(feel.kick);
           this.doShoot(fr.damage, fr.spread, fr.range, fr.pellets);
         }

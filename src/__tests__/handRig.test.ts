@@ -53,7 +53,7 @@ describe('PlayerBodyRenderer hand rig', () => {
     const hands = getArms(body);
     const idxBefore = hands.map((h) => (h.getObjectByName('index_proximal') as THREE.Object3D).rotation.x);
 
-    body.addRecoil(1.0, 0);
+    body.addRecoil('ak', 1.0, 0);
     body.tick({ dt: 0.016, isMoving: false, isCrouching: false, isSprinting: false, walkPhase: 0 });
 
     for (let i = 0; i < hands.length; i++) {

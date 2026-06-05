@@ -19,6 +19,15 @@ import * as THREE from 'three';
 import { GAME_CONFIG } from '../core/GameConfig';
 import type { WeaponType } from '../models/Weapon';
 import { buildWeaponModel, disposeWeaponModel } from './WeaponModels';
+import { getRecoilProfile } from '../assets/weaponProfiles';
+
+const DEG2RAD = Math.PI / 180;
+/** ±metres of viewmodel position jitter at full shake intensity. */
+const SHAKE_AMPLITUDE = 0.002;
+/** Duration of the per-shot viewmodel shake, in seconds. */
+const SHAKE_DURATION = 0.1;
+/** Scales a profile's vertical kick (deg) into the weapon-group local +z back-rotation. */
+const WEAPON_KICK_SCALE = 1.0;
 
 /** Material palette — kept simple and "tactical" looking. */
 const COLORS = {
@@ -96,6 +105,8 @@ export class PlayerBodyRenderer {
   private readonly leftLeg: THREE.Group;
   private readonly rightLeg: THREE.Group;
   private readonly weaponAnchor: THREE.Group;
+  /** Holds the weapon model; carries spring-damped recoil rotation + shake. */
+  private readonly weaponGroup: THREE.Group;
 
   // Hand rig (T6): wrist groups + per-finger segments for procedural animation
   private leftWrist!: THREE.Group;
@@ -120,9 +131,23 @@ export class PlayerBodyRenderer {
   // Smoothed movement state
   private breathPhase = 0;
   private crouchBlend = 0; // 0 = standing, 1 = crouched
-  private recoilKick = 0;   // 0..1 decays to 0
+  private recoilKick = 0;   // 0..1 decays to 0 (drives the arm/body kick)
   private recoilYaw = 0;    // small random yaw on each shot
   private recoilPitch = 0;  // upward pitch on each shot
+
+  // ── Per-weapon spring-damped recoil accumulators (T11) ───
+  // All are in radians, accumulate per shot, and spring back toward 0 over
+  // the active profile's recovery time. They DON'T snap back instantly, so
+  // sustained automatic fire climbs and then settles during the cooldown.
+  private recoilCamPitch = 0;   // camera up-kick (added to caller's pitch)
+  private recoilCamYaw = 0;     // camera side-kick (added to caller's yaw)
+  private recoilWeaponZ = 0;    // weapon group local +z back-rotation
+  private recoilRecoverMs = 150; // recovery time of the last-fired weapon
+  private recoilMaxZ = 0.25;     // cap for weapon back-rotation (rad)
+  private recoilMaxCamPitch = 0.25; // cap for camera up-kick (rad)
+  private recoilShot = 0;        // shot counter (drives horizontal pattern)
+  private shakeTimer = 0;        // seconds remaining on the viewmodel shake
+  private shakeIntensity = 0;    // 0..1 shake scale from the active profile
 
   // Weapon rig state
   private currentWeaponType: WeaponType = 'PISTOL';
@@ -216,10 +241,17 @@ export class PlayerBodyRenderer {
     this.rightWrist = this.rightArm.userData.wrist as THREE.Group;
     this.rightWristBaseRot = { x: this.rightWrist.rotation.x, y: this.rightWrist.rotation.y };
 
-    // Weapon anchor: attached to the right forearm, weapons parent to this
+    // Weapon anchor: attached to the right forearm, weapons parent to this.
+    // The anchor carries switch/reload/raise motion; the inner weaponGroup
+    // carries the spring-damped recoil (back-rotation + shake) so the two
+    // never fight each other.
     this.weaponAnchor = new THREE.Group();
     this.weaponAnchor.position.set(0, -0.22, 0.05);
     this.rightArm.add(this.weaponAnchor);
+
+    this.weaponGroup = new THREE.Group();
+    this.weaponGroup.name = 'weaponRecoilGroup';
+    this.weaponAnchor.add(this.weaponGroup);
 
     // Build the default weapon (PISTOL) immediately so FPV is never empty
     this.setWeaponModel('PISTOL');
@@ -239,7 +271,7 @@ export class PlayerBodyRenderer {
   /** Swap the visible weapon model. */
   private setWeaponModel(type: WeaponType): void {
     if (this.currentWeaponModel) {
-      this.weaponAnchor.remove(this.currentWeaponModel);
+      this.weaponGroup.remove(this.currentWeaponModel);
       disposeWeaponModel(this.currentWeaponModel);
     }
     // RIFLE and SNIPER get a procedural camo by default (T5 polish).
@@ -250,7 +282,7 @@ export class PlayerBodyRenderer {
     const a = WEAPON_ANCHOR[type];
     model.position.set(a.x, a.y, a.z);
     model.rotation.x = a.rotX;
-    this.weaponAnchor.add(model);
+    this.weaponGroup.add(model);
     this.currentWeaponModel = model;
     this.currentWeaponType = type;
   }
@@ -313,12 +345,70 @@ export class PlayerBodyRenderer {
 
   /**
    * Drive recoil animation when the player fires.
-   * Magnitude is in arbitrary units; the body normalizes it.
+   *
+   * @param weaponKey  archetype key (`'ak'`) or in-game weapon type (`'RIFLE'`);
+   *                   selects the per-weapon recoil profile.
+   * @param magnitude  shot strength multiplier (1.0 = a full kick).
+   * @param randomYaw  extra random body-twist amount (legacy body feel).
+   *
+   * Each call ACCUMULATES onto the camera, weapon-group and shake springs
+   * (capped per profile) and advances the horizontal recoil pattern. The
+   * springs are released over the profile's `recoveryMs` in {@link tick}, so
+   * sustained fire climbs and recovery is damped rather than instant.
    */
-  addRecoil(magnitude: number, randomYaw: number): void {
+  addRecoil(weaponKey: string, magnitude: number, randomYaw: number): void {
+    const profile = getRecoilProfile(weaponKey);
+
+    // Legacy arm/body kick (still drives the visible arm recoil).
     this.recoilKick = Math.min(1.0, this.recoilKick + magnitude);
     this.recoilYaw = (Math.random() - 0.5) * randomYaw;
     this.recoilPitch = (0.3 + Math.random() * 0.3) * magnitude;
+
+    // ── Camera + weapon-group spring targets ──
+    const vertical = profile.verticalKick * DEG2RAD * magnitude;
+    const sign = profile.horizontalPattern.length
+      ? profile.horizontalPattern[this.recoilShot % profile.horizontalPattern.length]
+      : 1;
+    const horizontal = profile.horizontalKick * DEG2RAD * magnitude * sign;
+
+    this.recoilMaxZ = profile.maxAccumulationDeg * DEG2RAD * WEAPON_KICK_SCALE;
+    this.recoilMaxCamPitch = profile.maxAccumulationDeg * DEG2RAD;
+
+    this.recoilCamPitch = Math.min(this.recoilMaxCamPitch, this.recoilCamPitch + vertical);
+    this.recoilCamYaw = Math.max(
+      -this.recoilMaxCamPitch,
+      Math.min(this.recoilMaxCamPitch, this.recoilCamYaw + horizontal),
+    );
+    this.recoilWeaponZ = Math.min(
+      this.recoilMaxZ,
+      this.recoilWeaponZ + vertical * WEAPON_KICK_SCALE,
+    );
+
+    this.recoilRecoverMs = profile.recoveryMs;
+
+    // Viewmodel shake — random position jitter that decays over SHAKE_DURATION.
+    this.shakeTimer = SHAKE_DURATION;
+    this.shakeIntensity = profile.shake;
+
+    this.recoilShot++;
+
+    // Apply the weapon back-rotation immediately so the kick is visible even
+    // before the next tick (and so unit tests can observe it synchronously).
+    this.weaponGroup.rotation.z = this.recoilWeaponZ;
+  }
+
+  /** The group carrying the spring-damped weapon recoil (back-rotation + shake). */
+  getWeaponGroup(): THREE.Group {
+    return this.weaponGroup;
+  }
+
+  /**
+   * Current spring-damped camera recoil offset (radians). The caller should
+   * ADD these to the look pitch/yaw when composing the camera orientation.
+   * `pitch` is positive = view kicks up.
+   */
+  getCameraRecoil(): { pitch: number; yaw: number } {
+    return { pitch: this.recoilCamPitch, yaw: this.recoilCamYaw };
   }
 
   /**
@@ -351,8 +441,31 @@ export class PlayerBodyRenderer {
     const speedFactor = isMoving ? (isSprinting ? 1.4 : 1.0) : 0.0;
     const swing = Math.sin(walkPhase) * 0.6 * speedFactor;
 
-    // Recoil decay
+    // Recoil decay (legacy arm/body kick)
     this.recoilKick = Math.max(0, this.recoilKick - dt * 6);
+
+    // ── Spring-damped recovery of the per-weapon recoil accumulators ──
+    // Lerp every accumulator toward rest with a time constant equal to the
+    // active weapon's recoveryMs, so a snappy MP5 settles far faster than an
+    // AK. This is the "spring back" half of the kick — never instant.
+    const tau = Math.max(0.001, this.recoilRecoverMs / 1000);
+    const recover = Math.min(1, dt / tau);
+    this.recoilCamPitch += -this.recoilCamPitch * recover;
+    this.recoilCamYaw += -this.recoilCamYaw * recover;
+    this.recoilWeaponZ += -this.recoilWeaponZ * recover;
+
+    // Viewmodel shake: random jitter for SHAKE_DURATION, decaying linearly.
+    let shakeX = 0;
+    let shakeY = 0;
+    if (this.shakeTimer > 0) {
+      this.shakeTimer = Math.max(0, this.shakeTimer - dt);
+      const decay = this.shakeTimer / SHAKE_DURATION; // 1 → 0
+      const amp = SHAKE_AMPLITUDE * this.shakeIntensity * decay;
+      shakeX = (Math.random() - 0.5) * 2 * amp;
+      shakeY = (Math.random() - 0.5) * 2 * amp;
+    }
+    this.weaponGroup.rotation.z = this.recoilWeaponZ;
+    this.weaponGroup.position.set(shakeX, shakeY, 0);
 
     // ── Legs ─────────────────────────────────────────────
     const legLift = isMoving ? Math.sin(walkPhase) * 0.25 * speedFactor : 0;
