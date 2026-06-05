@@ -117,12 +117,17 @@ declare module 'three' {
   }
 
   export class Scene extends Object3D {
-    fog: Fog | null;
+    fog: Fog | FogExp2 | null;
     environment: Texture | null;
   }
 
   export class Fog {
     constructor(color: number, near?: number, far?: number);
+  }
+
+  export class FogExp2 {
+    constructor(color: number, density?: number);
+    density: number;
   }
 
   export class WebGLRenderer {
@@ -178,6 +183,7 @@ declare module 'three' {
     side: number;
     depthWrite: boolean;
     depthTest: boolean;
+    fog: boolean;
     dispose(): void;
   }
 

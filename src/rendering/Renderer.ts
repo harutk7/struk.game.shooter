@@ -15,11 +15,7 @@ export class Renderer {
     this.container = container;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(
-      GAME_CONFIG.rendering.fogColor,
-      GAME_CONFIG.rendering.fogNear,
-      GAME_CONFIG.rendering.fogFar,
-    );
+    this.scene.fog = new THREE.FogExp2(0xc8d0d8, 0.012);
 
     this.camera = new THREE.PerspectiveCamera(
       GAME_CONFIG.camera.fov,

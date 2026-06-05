@@ -441,8 +441,7 @@ export class SceneBuilder {
       this.meshes.push(fixture);
     }
 
-    const { fogColor, fogNear, fogFar } = GAME_CONFIG.rendering;
-    this.scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
+    this.scene.fog = new THREE.FogExp2(0xc8d0d8, 0.012);
   }
 
   dispose(): void {

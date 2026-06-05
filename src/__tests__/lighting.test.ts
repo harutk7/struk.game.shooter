@@ -37,7 +37,8 @@ describe('lighting', () => {
   it('scene.fog is enabled after build', () => {
     const scene = buildScene();
     expect(scene.fog).not.toBeNull();
-    expect(scene.fog).toBeInstanceOf(THREE.Fog);
+    // T5 (skybox-fog) supersedes the linear Fog from T4 with exp2 fog
+    expect(scene.fog).toBeInstanceOf(THREE.FogExp2);
   });
 
   it('sun directional light has castShadow = true', () => {

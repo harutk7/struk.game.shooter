@@ -35,6 +35,10 @@ export class WeaponRenderer {
   private camera: THREE.Camera;
   private muzzleFlash: THREE.PointLight;
   private muzzleFlashSprite: THREE.Sprite;
+  private flashTextureReady = false;
+
+  /** Camera-parented viewmodel group. All materials have fog:false. */
+  public readonly weaponGroup: THREE.Group;
 
   private trailPool: ObjectPool<TrailData>;
   private impactPool: ObjectPool<ImpactData>;
@@ -52,14 +56,18 @@ export class WeaponRenderer {
     this.scene = scene;
     this.camera = camera;
 
+    // Weapon viewmodel — attached to camera, materials opt out of scene fog
+    this.weaponGroup = this.createWeaponGroup();
+    this.camera.add(this.weaponGroup);
+
     // Muzzle flash light
     this.muzzleFlash = new THREE.PointLight(0xffaa00, 3, 10);
     this.muzzleFlash.visible = false;
     this.scene.add(this.muzzleFlash);
 
-    // Muzzle flash sprite
+    // Muzzle flash sprite — texture is lazy so the constructor has no DOM dependency
     const spriteMat = new THREE.SpriteMaterial({
-      map: this.createFlashTexture(),
+      map: null,
       color: 0xffaa00,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
@@ -91,6 +99,29 @@ export class WeaponRenderer {
       (b) => this.resetBlood(b),
       12,
     );
+  }
+
+  private createWeaponGroup(): THREE.Group {
+    const group = new THREE.Group();
+    const bodyGeo = new THREE.BoxGeometry(0.07, 0.055, 0.38);
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a2a, roughness: 0.5, metalness: 0.65, fog: false,
+    });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.name = 'weaponBody';
+    body.position.set(0.18, -0.16, -0.32);
+    group.add(body);
+
+    const gripGeo = new THREE.BoxGeometry(0.045, 0.10, 0.07);
+    const gripMat = new THREE.MeshStandardMaterial({
+      color: 0x111111, roughness: 0.9, fog: false,
+    });
+    const grip = new THREE.Mesh(gripGeo, gripMat);
+    grip.name = 'weaponGrip';
+    grip.position.set(0.0, -0.065, 0.04);
+    body.add(grip);
+
+    return group;
   }
 
   private createFlashTexture(): THREE.Texture {
@@ -225,6 +256,11 @@ export class WeaponRenderer {
 
   /** Show muzzle flash at camera position. */
   showMuzzleFlash(): void {
+    if (!this.flashTextureReady) {
+      this.muzzleFlashSprite.material.map = this.createFlashTexture();
+      this.flashTextureReady = true;
+    }
+
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
     const pos = this.camera.position.clone().add(dir.multiplyScalar(0.5));
@@ -334,6 +370,8 @@ export class WeaponRenderer {
   }
 
   dispose(): void {
+    this.camera.remove(this.weaponGroup);
+
     this.scene.remove(this.muzzleFlash);
     this.scene.remove(this.muzzleFlashSprite);
     this.muzzleFlashSprite.material.dispose();
