@@ -1,68 +1,60 @@
 # Credits & Asset Licenses
 
-This file tracks third-party assets used in **struk.game.shooter** and their
-license attributions.
+This file tracks every third-party asset bundled with **struk.game.shooter**
+and its license attribution. It is the single source of truth for asset
+provenance and is verified automatically by `scripts/audit_credits.test.ts`.
+
+All assets currently shipped are **CC0 1.0 Universal** (public domain
+dedication) — see <https://creativecommons.org/publicdomain/zero/1.0/>.
 
 ---
 
-## Format
+## How to add a new asset
 
-Each entry added by a task should follow this template:
+1. Place the file under `public/assets/` (textures, models, HDRIs) or
+   `public/sounds/` (audio). Large CC0 textures/HDRIs may instead be declared
+   in `scripts/fetch_assets.mjs` so CI downloads them before the build.
+2. Add exactly **one** entry line to the matching `##` section below, starting
+   with `- ` and following the **Entry format** template.
+3. Include all five required fields: asset name, Source, Author, License, Added.
+4. Use a license token from the allowed set: `CC0`, `CC-BY`, `CC-BY-SA`,
+   `MIT`, `Apache-2.0`. Never ship an asset whose license is unknown.
+5. Run `npm test` — `audit_credits.test.ts` fails the build if any file lacks a
+   matching entry or uses a license outside the allowed set.
+
+### Entry format
 
 ```
-### <Asset Name>
-- **Source**: <URL>
-- **Author**: <Author or "Poly Haven">
-- **License**: CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/
-- **Used in**: <task ID that added the asset, e.g. T2>
-- **Local path**: public/assets/<filename>
+**<Asset Name>** — Source: <URL or "Quaternius Starter Kit Pro"> · Author: <Author> · License: <token> · Added: <YYYY-MM-DD> · Path: <repo-relative path> · Used in: <task IDs>
 ```
 
-Entries are grouped by category (Environment, Textures, Audio, Models) and
-sorted by the task that introduced them.
+Each asset is one line beginning with `- ` so the entry count always equals the
+number of files under `public/assets/` and `public/sounds/`.
 
 ---
 
 ## Environment Maps
 
-<!-- T1 stub — entries added by scripts/fetch_assets.mjs -->
-### Kiara 9 Dusk (1k HDR)
-- **Source**: https://polyhaven.com/a/kiara_9_dusk
-- **Author**: Poly Haven
-- **License**: CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/
-- **Used in**: T1 (sample asset — active use in T6 Skybox upgrade)
-- **Local path**: public/assets/kiara_9_dusk_1k.hdr
-
----
+- **Kiara 9 Dusk (1k HDR)** — Source: https://polyhaven.com/a/kiara_9_dusk · Author: Poly Haven · License: CC0 · Added: 2026-06-04 · Path: public/assets/kiara_9_dusk_1k.hdr · Used in: T1 (sample), T6 (skybox/IBL)
 
 ## Textures
 
-<!-- T1 stub — entries added by scripts/fetch_assets.mjs -->
-### Concrete Floor 02 — Diffuse 1k
-- **Source**: https://polyhaven.com/a/concrete_floor_02
-- **Author**: Poly Haven
-- **License**: CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/
-- **Used in**: T1 (sample), T2 (PBR floor)
-- **Local path**: public/assets/concrete_floor_02_diff_1k.jpg
-
-### Metal Plate — Diffuse 1k
-- **Source**: https://polyhaven.com/a/metal_plate
-- **Author**: Poly Haven
-- **License**: CC0 1.0 Universal — https://creativecommons.org/publicdomain/zero/1.0/
-- **Used in**: T1 (sample), T3 (PBR metal surface)
-- **Local path**: public/assets/metal_plate_diff_1k.jpg
-
-<!-- TODO T2: add normal map + AO entries for concrete_floor_02 -->
-<!-- TODO T3: add normal map + roughness entries for metal_plate -->
-
----
-
-## Audio
-
-<!-- TODO T8: add audio asset entries here -->
-
----
+- **Concrete Floor 02 — Diffuse 1k** — Source: https://polyhaven.com/a/concrete_floor_02 · Author: Poly Haven · License: CC0 · Added: 2026-06-04 · Path: public/assets/concrete_floor_02_diff_1k.jpg · Used in: T1 (sample), T2 (PBR floor)
+- **Metal Plate — Diffuse 1k** — Source: https://polyhaven.com/a/metal_plate · Author: Poly Haven · License: CC0 · Added: 2026-06-04 · Path: public/assets/metal_plate_diff_1k.jpg · Used in: T1 (sample), T3 (PBR metal surfaces)
 
 ## Weapon Models
 
-<!-- TODO T7: add weapon GLTF model entries here -->
+- **Pistol (glTF)** — Source: Quaternius Starter Kit Pro · Author: Quaternius · License: CC0 · Added: 2026-06-04 · Path: public/assets/weapons/pistol.glb · Used in: T7 (weapon glTF models)
+- **Rifle (glTF)** — Source: Quaternius Starter Kit Pro · Author: Quaternius · License: CC0 · Added: 2026-06-04 · Path: public/assets/weapons/rifle.glb · Used in: T7 (weapon glTF models)
+- **Shotgun (glTF)** — Source: Quaternius Starter Kit Pro · Author: Quaternius · License: CC0 · Added: 2026-06-04 · Path: public/assets/weapons/shotgun.glb · Used in: T7 (weapon glTF models)
+- **Sniper (glTF)** — Source: Quaternius Starter Kit Pro · Author: Quaternius · License: CC0 · Added: 2026-06-04 · Path: public/assets/weapons/sniper.glb · Used in: T7 (weapon glTF models)
+
+## Audio
+
+<!-- No audio assets are committed yet. Sound effects are introduced in T13–T15
+     (AudioManager + SFX). When a sound is added under public/sounds/, append a
+     one-line entry here following the Entry format above. -->
+
+---
+
+_Last audited: 2026-06-05 (T12). Asset count: 7 — all CC0 1.0 Universal._
