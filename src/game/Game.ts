@@ -742,19 +742,11 @@ export class Game {
           this.footsteps.playBotFootstep(next.id, [next.position.x, next.position.y, next.position.z]);
         }
       }
-      // Track pending deaths (the bot just lost all health)
-      if (bot.isAlive && !next.isAlive) {
-        this.botRenderer.startDeathAnimation(next.id);
-        this.bus.emit('botKilled', {
-          id: next.id, name: next.name, killerId: 'player',
-          weaponType: this.player.currentWeapon,
-          position: { x: next.position.x, z: next.position.z },
-        });
-        // Award the player a kill on the scoreboard
-        const kr = addKill(this.score, 100, performance.now() / 1000);
-        this.score = kr.state;
-        this.hud.updateScore(this.score.score);
-      }
+      // Kill bookkeeping (death animation, botKilled, scoreboard) now happens
+      // synchronously in doShoot() the instant a bot's HP hits 0 — see the note
+      // there and BUG_T20_DIAGNOSIS.md. A bot can only die from a player shot,
+      // and doShoot() is the only place that flips isAlive=false, so there is no
+      // longer any post-tick death transition to detect here.
       updated.push(next);
     }
     this.bots = updated;
@@ -829,6 +821,22 @@ export class Game {
                 };
                 // Death grunt at the bot's position (isAlive just flipped false).
                 getBotVoice().playBotVoice(bot.id, 'death', this.botVoicePos(this.bots[idx]));
+                // Register the kill HERE, at the point the bot actually dies.
+                // Previously this lived in tickBots() behind a
+                // `bot.isAlive && !next.isAlive` diff, but doShoot() flips
+                // isAlive=false synchronously in the same frame, so that guard
+                // was never true and the kill was silently dropped — the match
+                // could never reach scoreLimit (BUG T20). See BUG_T20_DIAGNOSIS.md.
+                const dead = this.bots[idx];
+                this.botRenderer.startDeathAnimation(dead.id);
+                this.bus.emit('botKilled', {
+                  id: dead.id, name: dead.name, killerId: 'player',
+                  weaponType: this.player.currentWeapon,
+                  position: { x: dead.position.x, z: dead.position.z },
+                });
+                const kr = addKill(this.score, 100, performance.now() / 1000);
+                this.score = kr.state;
+                this.hud.updateScore(this.score.score);
               }
               this.bus.emit('botDamaged', {
                 id: bot.id, amount: dmg,

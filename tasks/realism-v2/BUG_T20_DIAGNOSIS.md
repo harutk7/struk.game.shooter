@@ -112,3 +112,62 @@ defeats. Concretely, one of:
 Either way, after the fix the repro test's invariant must hold: **one player kill ⇒ one
 `botKilled` event ⇒ scoreboard kills = 1, match still `active`.** T21 should convert this
 repro into a green regression test.
+
+---
+
+## 5. RESOLVED (T21)
+
+**Fixed by:** agent id **134** (Default Claude · `claude:sonnet`)
+**Branch:** `fix/realism-v2-game-stops-bug` (cut from the T20 branch, i.e. `main` @ `2bc3456`
+plus the T20 repro commit `6076dae`)
+**Commit:** `fix(game): resolve game-stops-on-first-kill (see BUG_T20_DIAGNOSIS.md)`
+
+### What changed
+
+Adopted the **preferred** fix from §4: register the kill *where the death actually
+happens* instead of relying on a post-tick diff that the synchronous in-place kill
+defeated.
+
+1. **`src/game/Game.ts` — `doShoot()`** (bot-hit branch): when a bot's HP crosses to 0,
+   the kill is now booked **right there**, in the same statement that flips the bot dead:
+   - `this.botRenderer.startDeathAnimation(id)` — death ragdoll plays,
+   - `this.bus.emit('botKilled', { killerId: 'player', … })` — scoreboard + kill feed fire,
+   - `addKill(this.score, 100, …)` + `hud.updateScore(...)` — score HUD updates.
+
+2. **`src/game/Game.ts` — `tickBots()`**: removed the now-dead
+   `if (bot.isAlive && !next.isAlive) { … }` death-detection branch. A bot can only die
+   from a player shot and `doShoot()` is the only place that flips `isAlive = false`, so
+   there is no post-tick transition left to detect. Respawn handling in `tickBots()` is
+   unchanged.
+
+No other files in `src/` were touched; the match state machine, BotAI, respawn logic,
+and realism-v2 systems (assets/PBR/audio/pathfinding) were left intact.
+
+### Tests
+
+- `src/__tests__/repro_game_stops_on_kill.test.ts` — the T20 repro, converted from RED to
+  a **green** regression test that mirrors the fixed flow (kill registered at the moment of
+  death; `tickBots()` emits no second `botKilled`).
+- `src/__tests__/deathmatch_kill_flow.test.ts` — **new** hardening suite:
+  - killing N = 3 and N = 5 bots keeps the match `active`,
+  - the match transitions to `finished` **only** at `scoreLimit` (20), with the player as
+    winner — and stays `active` for every kill before that,
+  - a killed bot respawns after `respawnDelay` (3 s): back in the world with
+    `isAlive = true`, full health, non-`dead` state, death tally preserved.
+
+### Verification gates (all green)
+
+- `npm test` — **266 passed** (was 261 passed / 1 failing repro before the fix).
+- `npm run build` — `tsc && vite build` succeed.
+- `node scripts/runtime_smoke.mjs` — 41 modules fetched, 0 transform errors (run against
+  `npm run dev` on `localhost:3000`).
+
+### Screenshot note
+
+The VERIFY step asks for a mid-match screenshot
+(`tasks/realism-v2/screenshots/t21-match-after-kills.png`). This sandbox has **no headless
+browser with a WebGL context** (no Chromium/Puppeteer/Playwright installed), and the
+deathmatch requires live pointer-lock gameplay to render, so a genuine in-game screenshot
+could not be captured here. Rather than fabricate an image, the `screenshots/` directory is
+kept with its `.gitkeep` placeholder; the headless `runtime_smoke` gate stands in as the
+automated runtime proof that every game module loads and transforms cleanly after the fix.

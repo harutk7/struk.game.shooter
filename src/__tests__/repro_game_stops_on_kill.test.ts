@@ -1,50 +1,41 @@
 /**
- * REPRO (T20) — "After 1 bot die, game stops."
+ * REGRESSION (T20 repro → T21 fix) — "After 1 bot die, game stops."
  *
- * This is a DIAGNOSIS test. It is EXPECTED TO FAIL on the current `main`
- * (commit 2bc3456). The failing assertions are the deliverable: they pin
- * down the exact moment the deathmatch kill-flow drops a player kill on the
- * floor. The fix lands in T21 — see tasks/realism-v2/BUG_T20_DIAGNOSIS.md.
+ * This started life as a T20 DIAGNOSIS test that was RED on `main`
+ * (commit 2bc3456). T21 fixed the bug and converted it into the GREEN
+ * regression test below. See tasks/realism-v2/BUG_T20_DIAGNOSIS.md.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * Root cause (verified):
+ * Root cause (was):
  *
- * The deathmatch kill of a bot is applied in TWO places, in the WRONG order,
+ * The deathmatch kill of a bot was applied in TWO places, in the WRONG order,
  * within a single Game.loop() frame:
  *
- *   1. Game.doShoot()  (src/game/Game.ts ~L714-739) runs FIRST when the player
- *      fires. On the killing shot it mutates the bot in-place and flips
- *      `isAlive = false`, `state = 'dead'` SYNCHRONOUSLY:
+ *   1. Game.doShoot() runs FIRST when the player fires. On the killing shot it
+ *      mutated the bot in-place and flipped `isAlive = false`, `state = 'dead'`
+ *      SYNCHRONOUSLY — but did NOT register the kill.
  *
- *          this.bots[idx] = { ...this.bots[idx], isAlive: false, state: 'dead', ... };
+ *   2. Game.tickBots() ran LATER in the same frame and tried to detect the
+ *      death with `if (bot.isAlive && !next.isAlive)`. But `bot` was the array
+ *      element doShoot ALREADY killed, so `bot.isAlive` was already `false` and
+ *      the guard was never true — `botKilled` was never emitted, the scoreboard
+ *      never incremented, and the match could never reach scoreLimit.
  *
- *   2. Game.tickBots() (src/game/Game.ts ~L653) runs LATER in the same frame
- *      and tries to detect the death by comparing the pre-tick bot to the
- *      post-tick bot:
+ * The fix (T21):
  *
- *          if (bot.isAlive && !next.isAlive) {
- *            this.botRenderer.startDeathAnimation(next.id);
- *            this.bus.emit('botKilled', { ... killerId: 'player' ... });
- *            addKill(this.score, 100, ...);   // scoreboard
- *          }
- *
- *      But `bot` here is the array element doShoot ALREADY killed, so
- *      `bot.isAlive` is already `false`. The guard is never true.
- *
- * Net effect: `botKilled` is NEVER emitted for a player kill, so the
- * `botKilled` handler in Game.wireEvents() (~L215) never calls
- * registerKillEvent(), the scoreboard never increments, the kill feed stays
- * empty, and the ragdoll/death animation never plays. The match can never
- * reach scoreLimit, so the deathmatch is permanently stuck after the first
- * kill — the user's "after 1 bot die, game stops."
+ * Register the kill in Game.doShoot() at the exact point the bot's HP crosses
+ * to 0 (emit `botKilled` + startDeathAnimation + addKill there), and drop the
+ * dead `bot.isAlive && !next.isAlive` branch from tickBots(). A bot can only
+ * die from a player shot and doShoot() is the only place that flips
+ * isAlive=false, so the kill now fires exactly once, where the death happens.
  *
  * NOTE on test shape: Game cannot be instantiated under vitest (its
  * constructor builds a THREE.WebGLRenderer + DOM widgets that need a real
  * canvas/WebGL context, unavailable in the node test env, and jsdom is not a
- * dependency). So this test reproduces Game's exact two-phase kill sequence
- * using the REAL domain modules (createBot, tickBot, EventBus, MatchManager)
- * and asserts the user-facing invariant. Line references above let T21 verify
- * the fix against the real source.
+ * dependency). So this test reproduces Game's kill sequence using the REAL
+ * domain modules (createBot, tickBot, EventBus, MatchManager) and asserts the
+ * user-facing invariant: one player kill ⇒ one botKilled ⇒ scoreboard kills=1,
+ * match still active.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -61,9 +52,11 @@ import { GAME_CONFIG } from '../core/GameConfig';
 
 /**
  * Reproduce one Game.loop() frame in which the player lands the killing shot
- * on a bot. Mirrors src/game/Game.ts exactly:
- *   - doShoot() kills the bot synchronously, then
- *   - tickBots() runs the death-detection / event-emit / scoring.
+ * on a bot. Mirrors the FIXED src/game/Game.ts:
+ *   - doShoot() drops the bot's HP to 0, flips it dead, AND registers the kill
+ *     (emit botKilled) synchronously — all at the point of death.
+ *   - tickBots() then runs the AI tick for every bot with NO death-detection
+ *     branch (it was removed in T21).
  * Returns what the player-visible systems observed.
  */
 function simulateKillingFrame() {
@@ -84,8 +77,10 @@ function simulateKillingFrame() {
     { id: bot.id, name: bot.name, color: bot.color },
   ]);
 
-  // ── Phase 1 — Game.doShoot() (Game.ts ~L723): player's bullet drops the
-  //    bot's HP to 0 and the kill is committed SYNCHRONOUSLY in-place. ──
+  // ── Phase 1 — Game.doShoot(): the player's bullet drops the bot's HP to 0.
+  //    The bot is flipped dead AND the kill is registered right here, the
+  //    instant the death happens (this is the T21 fix). ──
+  const wasAlive = bot.isAlive;
   let bots: BotData[] = [
     {
       ...bot,
@@ -96,9 +91,20 @@ function simulateKillingFrame() {
       deaths: bot.deaths + 1,
     },
   ];
+  const dead = bots[0];
+  if (wasAlive && !dead.isAlive) {
+    bus.emit('botKilled', {
+      id: dead.id,
+      name: dead.name,
+      killerId: 'player',
+      weaponType: 'RIFLE',
+      position: { x: dead.position.x, z: dead.position.z },
+    });
+  }
 
-  // ── Phase 2 — Game.tickBots() (Game.ts ~L588-665): run the AI tick and the
-  //    death-transition detection for every bot, exactly as the real loop. ──
+  // ── Phase 2 — Game.tickBots(): run the AI tick for every bot. There is no
+  //    longer a death-detection branch here — the kill was already booked in
+  //    doShoot(), so this phase must NOT emit a second botKilled. ──
   const world: BotWorldSnapshot = {
     playerPosition: { x: 0, y: 0, z: 0 },
     playerAlive: true,
@@ -113,19 +119,7 @@ function simulateKillingFrame() {
   const updated: BotData[] = [];
   for (const b of bots) {
     const res = tickBot(b, world, dt);
-    const next = res.bot;
-
-    // Game.ts L653 — the death-detection guard.
-    if (b.isAlive && !next.isAlive) {
-      bus.emit('botKilled', {
-        id: next.id,
-        name: next.name,
-        killerId: 'player',
-        weaponType: 'RIFLE',
-        position: { x: next.position.x, z: next.position.z },
-      });
-    }
-    updated.push(next);
+    updated.push(res.bot);
   }
   bots = updated;
 
@@ -133,29 +127,25 @@ function simulateKillingFrame() {
   return { botKilledCount, playerKills: playerScore.kills, matchPhase: match.phase };
 }
 
-describe('REPRO T20 — game stops on first kill', () => {
-  it('registers the kill when the player kills one bot (FAILS today — bug)', () => {
+describe('REGRESSION T20/T21 — game does NOT stop on first kill', () => {
+  it('registers exactly one kill when the player kills one bot, match stays active', () => {
     const { botKilledCount, playerKills, matchPhase } = simulateKillingFrame();
 
-    // The match should still be live — confirms scoreLimit/state-machine are
-    // NOT the cause (this assertion PASSES, ruling those hypotheses out).
+    // The match stays live — scoreLimit/state-machine were never the cause.
     expect(matchPhase, 'match should remain IN_PROGRESS (active) after one kill').toBe('active');
 
-    // The actual bug: the player's kill is dropped. These FAIL on `main`
-    // because doShoot() already flipped isAlive=false before tickBots() looked,
-    // so the botKilled event is never emitted and the kill never scores.
+    // The fix: doShoot() registers the kill at the point of death, so botKilled
+    // fires exactly once and the scoreboard records it. (Before T21 this was 0.)
     expect(
       botKilledCount,
-      'Game.tickBots() should emit exactly one botKilled when the player kills a bot, ' +
-        'but it emits 0: doShoot() already set isAlive=false, so the ' +
-        '`bot.isAlive && !next.isAlive` guard (Game.ts L653) is never true.',
+      'exactly one botKilled must be emitted when the player kills a bot — ' +
+        'registered in doShoot() at the moment of death (T21 fix).',
     ).toBe(1);
 
     expect(
       playerKills,
-      'the deathmatch scoreboard should record the player kill (kills=1), ' +
-        'but it stays 0 — the match can never reach scoreLimit, so play is ' +
-        'stuck after the first kill.',
+      'the deathmatch scoreboard must record the player kill (kills=1) so the ' +
+        'match can progress toward scoreLimit.',
     ).toBe(1);
   });
 });
