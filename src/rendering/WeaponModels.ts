@@ -12,6 +12,132 @@
 
 import * as THREE from 'three';
 import type { WeaponType } from '../models/Weapon';
+import { AssetLoader } from '../assets/AssetLoader';
+import { specForPart } from '../assets/weaponMaterials';
+import type { PBRMaterialSpec } from '../assets/weaponMaterials';
+
+// ── glTF weapon models (T7) ───────────────────────────────────────────────────
+//
+// Each in-game weapon type maps to a CC0 low-poly glTF model fetched into
+// public/assets/weapons/ by scripts/fetch_assets.mjs. The procedural box models
+// below are KEPT as a fallback: buildWeaponModel() always returns a procedural
+// group immediately, then asynchronously swaps in the glTF once it loads. If the
+// glTF fails to load (404, parse error, headless test), the procedural model
+// stays — the game never breaks.
+//
+// `targetLength` is the desired world-space size of the model's longest axis, in
+// metres, chosen to roughly match the original procedural silhouette so the gun
+// doesn't appear huge or tiny in the player's hands.
+
+interface WeaponGLTFConfig {
+  url: string;
+  targetLength: number;
+}
+
+const WEAPON_GLTF: Record<WeaponType, WeaponGLTFConfig> = {
+  PISTOL:  { url: '/assets/weapons/pistol.glb',  targetLength: 0.24 },
+  RIFLE:   { url: '/assets/weapons/rifle.glb',   targetLength: 0.62 },
+  SHOTGUN: { url: '/assets/weapons/shotgun.glb', targetLength: 0.70 },
+  SNIPER:  { url: '/assets/weapons/sniper.glb',  targetLength: 0.85 },
+};
+
+// Shared, lazily-created loader. Tests inject a mock via setWeaponAssetLoader().
+let weaponLoader: AssetLoader | null = null;
+
+function getWeaponLoader(): AssetLoader {
+  if (!weaponLoader) weaponLoader = new AssetLoader();
+  return weaponLoader;
+}
+
+/** Override the AssetLoader used to fetch weapon glTF models (test hook). */
+export function setWeaponAssetLoader(loader: AssetLoader | null): void {
+  weaponLoader = loader;
+}
+
+/** Count descendant meshes of an object (a loaded glTF scene or fallback). */
+function countMeshes(obj: THREE.Object3D): number {
+  let n = 0;
+  obj.traverse((o: THREE.Object3D) => {
+    if ((o as THREE.Mesh).isMesh) n++;
+  });
+  return n;
+}
+
+/**
+ * Normalise a loaded glTF scene so it visually replaces the procedural model:
+ *   - uniformly scaled so its longest axis equals `targetLength` metres,
+ *   - re-oriented so its longest axis lies along Z (the firing axis) and it is
+ *     recentred on its own bounding box,
+ *   - every mesh casts shadows.
+ *
+ * Robust to degenerate/empty geometry (mocked meshes in tests): if the bounding
+ * box is zero-sized or non-finite, scaling/orienting is skipped.
+ */
+function prepareGLTFModel(scene: THREE.Object3D, type: WeaponType): THREE.Group {
+  const wrapper = new THREE.Group();
+  wrapper.name = `${type}_GLTF`;
+
+  scene.traverse((o: THREE.Object3D) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh) m.castShadow = true;
+  });
+
+  const box = new THREE.Box3().setFromObject(scene);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+
+  const dims = [size.x, size.y, size.z];
+  const longest = Math.max(dims[0], dims[1], dims[2]);
+  const finite = Number.isFinite(longest) && longest > 1e-6 &&
+    Number.isFinite(center.x) && Number.isFinite(center.y) && Number.isFinite(center.z);
+
+  // Recentre the model on its bounding-box centre so it pivots about itself.
+  if (finite) scene.position.set(-center.x, -center.y, -center.z);
+
+  // Re-orient: if the longest axis is X (typical for these Quaternius models),
+  // rotate +90° about Y so the barrel runs along Z like the procedural models.
+  const inner = new THREE.Group();
+  inner.add(scene);
+  if (finite && size.x >= size.y && size.x >= size.z) {
+    inner.rotation.y = Math.PI / 2;
+  }
+
+  if (finite) {
+    const cfg = WEAPON_GLTF[type];
+    const s = cfg.targetLength / longest;
+    wrapper.scale.set(s, s, s);
+  }
+
+  wrapper.add(inner);
+  return wrapper;
+}
+
+/**
+ * Try to load the glTF model for `type` and, on success, replace the procedural
+ * children of `group` with it. On any failure the procedural model is left in
+ * place. Fire-and-forget; safe to ignore the returned promise.
+ */
+function enhanceWithGLTF(group: THREE.Group, type: WeaponType): Promise<void> {
+  const cfg = WEAPON_GLTF[type];
+  return getWeaponLoader().loadGLTF(cfg.url).then((gltf) => {
+    const scene = gltf.scene;
+    if (!scene || countMeshes(scene) === 0) return; // keep procedural fallback
+    const model = prepareGLTFModel(scene, type);
+    // Drop procedural geometry, keep the group's transform/orientation.
+    for (const child of [...group.children]) {
+      group.remove(child);
+      disposeWeaponModel(child);
+    }
+    group.add(model);
+    // Re-skin any glTF parts we can identify by name with PBR materials (T8).
+    // Unrecognised meshes keep their glTF-authored material.
+    applyWeaponMaterials(model, type);
+  }).catch(() => {
+    // Network/parse error — procedural model already in place.
+  });
+}
 
 const MAT = {
   steel: () => new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.4, metalness: 0.7 }),
@@ -20,6 +146,103 @@ const MAT = {
   rubber: () => new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 1.0 }),
   darkWood: () => new THREE.MeshStandardMaterial({ color: 0x3a2a14, roughness: 0.9 }),
 };
+
+// ── PBR per-part materials (T8) ───────────────────────────────────────────────
+//
+// After a weapon is built (procedural or glTF), applyWeaponMaterials() walks its
+// meshes and re-skins each recognised part (barrel, grip, handguard, …) with a
+// MeshStandardMaterial tuned for metal / polymer / wood / rubber — see
+// src/assets/weaponMaterials.ts for the name→category mapping. Metal parts get
+// high metalness so they reflect scene.environment (the HDRI from EnvironmentMap);
+// wood parts get a procedural wood-grain map so the furniture shows grain.
+
+// Shared procedural wood-grain texture (lazily built once, reused everywhere).
+let woodTexture: THREE.Texture | null = null;
+
+/** Deterministic value noise in [0,1) — no Math.random so the grain is stable. */
+function grainNoise(x: number, y: number): number {
+  const s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+/**
+ * Build a small tiling wood-grain texture as a DataTexture (pure pixel data, so
+ * it works headlessly in tests — no canvas/DOM required). Vertical streaks plus
+ * warped rings read as grain when wrapped over the stock/handguard.
+ */
+function makeWoodTexture(): THREE.Texture {
+  const W = 64;
+  const H = 64;
+  const data = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const ring = Math.sin(x * 0.30 + Math.sin(y * 0.06) * 2.4) * 0.5 + 0.5;
+      const streak = Math.sin(y * 1.6 + x * 0.05) * 0.06;
+      const noise = grainNoise(x, y) * 0.10;
+      const t = Math.min(1, Math.max(0, ring * 0.7 + 0.13 + streak + noise));
+      // Lerp dark→light wood brown.
+      const r = Math.round(0x4a + (0x8c - 0x4a) * t);
+      const g = Math.round(0x2c + (0x5a - 0x2c) * t);
+      const b = Math.round(0x14 + (0x2e - 0x14) * t);
+      const i = (y * W + x) * 4;
+      data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, 2);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function getWoodTexture(): THREE.Texture {
+  if (!woodTexture) woodTexture = makeWoodTexture();
+  return woodTexture;
+}
+
+/** Build a MeshStandardMaterial from a PBR spec (plus the wood map if asked). */
+function makeMaterialFromSpec(spec: PBRMaterialSpec): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({
+    color: spec.color,
+    metalness: spec.metalness,
+    roughness: spec.roughness,
+  });
+  mat.envMapIntensity = spec.envMapIntensity;
+  if (spec.map === 'wood') {
+    mat.map = getWoodTexture();
+    mat.color.setHex(0xffffff); // let the grain texture supply the colour
+  }
+  mat.needsUpdate = true;
+  return mat;
+}
+
+/**
+ * Assign per-part PBR materials to a built weapon model.
+ *
+ * Walks every mesh in `model`, looks its name up in weaponMaterials, and for
+ * RECOGNISED parts replaces the material with a metal / polymer / wood / rubber
+ * MeshStandardMaterial. Meshes whose names aren't recognised are left untouched,
+ * so any material authored inside a glTF survives (DO #3). Safe to call on both
+ * the procedural box model and a loaded glTF scene.
+ */
+export function applyWeaponMaterials(model: THREE.Object3D, type: WeaponType): void {
+  model.traverse((o: THREE.Object3D) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const spec = specForPart(type, o.name);
+    if (!spec) return; // unknown part — keep its existing material
+    const replacement = makeMaterialFromSpec(spec);
+    // Dispose the material we're swapping out to avoid leaking GPU resources.
+    const old = m.material;
+    if (Array.isArray(old)) old.forEach((mm) => mm.dispose());
+    else if (old) old.dispose();
+    m.material = replacement;
+  });
+}
 
 /**
  * Apply a procedural camo to all named 'body' / 'handguard' / 'stock'
@@ -48,7 +271,9 @@ export function applyCamo(model: THREE.Object3D, camo: 'none' | 'woodland' | 'de
     const m = o as THREE.Mesh;
     if (targets.includes(o.name) && (m as any).material) {
       const mat = m.material as THREE.MeshStandardMaterial;
-      if (mat && mat.map === null) {
+      // Camo is an explicit override: it wins over the PBR wood/polymer map
+      // that applyWeaponMaterials may already have assigned to these parts.
+      if (mat) {
         mat.map = tex;
         mat.color.setHex(0xffffff);
         mat.needsUpdate = true;
@@ -272,19 +497,55 @@ function buildSniper(): THREE.Group {
   return g;
 }
 
-/** Build a model for the given weapon type, with an optional camo pattern. */
-export function buildWeaponModel(type: WeaponType, camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none'): THREE.Group {
-  let g: THREE.Group;
+/** Build the procedural (box-geometry) model for a weapon type. */
+function buildProceduralModel(type: WeaponType): THREE.Group {
   switch (type) {
-    case 'PISTOL':  g = buildPistol(); break;
-    case 'RIFLE':   g = buildRifle(); break;
-    case 'SHOTGUN': g = buildShotgun(); break;
-    case 'SNIPER':  g = buildSniper(); break;
-    default:        g = buildPistol();
+    case 'PISTOL':  return buildPistol();
+    case 'RIFLE':   return buildRifle();
+    case 'SHOTGUN': return buildShotgun();
+    case 'SNIPER':  return buildSniper();
+    default:        return buildPistol();
   }
+}
+
+/**
+ * Build a model for the given weapon type, with an optional camo pattern.
+ *
+ * Returns a procedural group SYNCHRONOUSLY (so existing call sites are
+ * unchanged) and then asynchronously swaps in the CC0 glTF model once it
+ * loads. If the glTF fails to load, the procedural model stays as a fallback.
+ */
+export function buildWeaponModel(type: WeaponType, camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none'): THREE.Group {
+  const g = buildProceduralModel(type);
+  applyWeaponMaterials(g, type);
   if (camo !== 'none') applyCamo(g, camo);
+  void enhanceWithGLTF(g, type);
   return g;
 }
+
+/**
+ * Asynchronously build a weapon model, preferring the CC0 glTF model and
+ * falling back to the procedural box model if it fails to load. Resolves once
+ * the model (glTF or fallback) is ready. The returned group keeps the same
+ * outer transform/scale (1,1,1) as the procedural version — the glTF is scaled
+ * on an inner wrapper — so it drops into the existing anchor structure.
+ */
+export async function loadWeaponModel(
+  type: WeaponType,
+  camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none',
+): Promise<THREE.Group> {
+  const g = buildProceduralModel(type);
+  applyWeaponMaterials(g, type);
+  if (camo !== 'none') applyCamo(g, camo);
+  await enhanceWithGLTF(g, type);
+  return g;
+}
+
+/** Convenience async builders, one per weapon type (see loadWeaponModel). */
+export const createPistol  = (camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none') => loadWeaponModel('PISTOL', camo);
+export const createRifle   = (camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none') => loadWeaponModel('RIFLE', camo);
+export const createShotgun = (camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none') => loadWeaponModel('SHOTGUN', camo);
+export const createSniper  = (camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none') => loadWeaponModel('SNIPER', camo);
 
 /** Dispose all materials/geometries inside a weapon model. */
 export function disposeWeaponModel(model: THREE.Object3D): void {

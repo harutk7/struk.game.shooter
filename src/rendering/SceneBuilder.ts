@@ -7,16 +7,50 @@ import * as THREE from 'three';
 import { GAME_CONFIG } from '../core/GameConfig';
 import type { AABBCollider } from '../systems/PhysicsSystem';
 
+const FLOOR_TEXTURE_URL = '/assets/concrete_floor_02_diff_1k.jpg';
+const FLOOR_TEXTURE_REPEAT = 8;
+
+// PBR texture URLs for arena objects (served from /public/assets/)
+const CONCRETE_DIFF_URL = '/assets/concrete_wall_diff_1k.jpg';
+const WOOD_DIFF_URL = '/assets/wood_crate_diff_1k.jpg';
+const METAL_DIFF_URL = '/assets/metal_barrel_diff_1k.jpg';
+const STONE_DIFF_URL = '/assets/stone_pillar_diff_1k.jpg';
+
+export interface FloorTextureLoader {
+  load(url: string): THREE.Texture;
+}
+
 export class SceneBuilder {
   private scene: THREE.Scene;
+  private textureLoader: FloorTextureLoader;
   private colliders: AABBCollider[] = [];
   private meshes: THREE.Object3D[] = [];
+  private envMap?: THREE.Texture;
 
-  constructor(scene: THREE.Scene) {
+  // Shared PBR material instances — created once in build(), reused per object type
+  private wallMat!: THREE.MeshStandardMaterial;
+  private crateMat!: THREE.MeshStandardMaterial;
+  private barrelMat!: THREE.MeshStandardMaterial;
+  private pillarMat!: THREE.MeshStandardMaterial;
+
+  constructor(scene: THREE.Scene, textureLoader?: FloorTextureLoader, envMap?: THREE.Texture) {
     this.scene = scene;
+    this.textureLoader = textureLoader ?? new THREE.TextureLoader();
+    this.envMap = envMap;
   }
 
   build(): AABBCollider[] {
+    // Initialise shared PBR materials before any geometry is created
+    this.wallMat = this.makeWallMaterial();
+    this.crateMat = this.makeCrateMaterial();
+    this.barrelMat = this.makeBarrelMaterial();
+    this.pillarMat = this.makePillarMaterial();
+
+    // Apply environment map globally so all PBR materials reflect correctly
+    if (this.envMap) {
+      this.scene.environment = this.envMap;
+    }
+
     this.createFloor();
     this.createWalls();
     this.createObstacles();
@@ -24,6 +58,116 @@ export class SceneBuilder {
     this.createLighting();
     return this.colliders;
   }
+
+  // ─── PBR material factories ───────────────────────────────────────────────
+
+  /** Concrete — high roughness, zero metalness */
+  private makeWallMaterial(): THREE.MeshStandardMaterial {
+    const map = this.loadTex(CONCRETE_DIFF_URL, 2);
+    const normalMap = this.loadTex(CONCRETE_DIFF_URL, 2);
+    const aoMap = this.createAoTexture(0.7);
+    return new THREE.MeshStandardMaterial({
+      map, normalMap, aoMap, aoMapIntensity: 0.6,
+      roughness: 0.9, metalness: 0.0,
+    });
+  }
+
+  /** Wood — warm organic roughness, zero metalness */
+  private makeCrateMaterial(): THREE.MeshStandardMaterial {
+    const map = this.loadTex(WOOD_DIFF_URL, 1);
+    const normalMap = this.loadTex(WOOD_DIFF_URL, 1);
+    const aoMap = this.createAoTexture(0.65);
+    return new THREE.MeshStandardMaterial({
+      map, normalMap, aoMap, aoMapIntensity: 0.7,
+      roughness: 0.85, metalness: 0.0,
+    });
+  }
+
+  /** Painted metal — low roughness, high metalness */
+  private makeBarrelMaterial(): THREE.MeshStandardMaterial {
+    const map = this.loadTex(METAL_DIFF_URL, 1);
+    const normalMap = this.loadTex(METAL_DIFF_URL, 1);
+    const aoMap = this.createAoTexture(0.8);
+    return new THREE.MeshStandardMaterial({
+      map, normalMap, aoMap, aoMapIntensity: 0.5,
+      roughness: 0.4, metalness: 0.7,
+    });
+  }
+
+  /** Weathered stone — maximum roughness, zero metalness */
+  private makePillarMaterial(): THREE.MeshStandardMaterial {
+    const map = this.loadTex(STONE_DIFF_URL, 1);
+    const normalMap = this.loadTex(STONE_DIFF_URL, 1);
+    const aoMap = this.createAoTexture(0.6);
+    return new THREE.MeshStandardMaterial({
+      map, normalMap, aoMap, aoMapIntensity: 0.8,
+      roughness: 0.95, metalness: 0.0,
+    });
+  }
+
+  private loadTex(url: string, repeat: number): THREE.Texture {
+    const tex = this.textureLoader.load(url);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(repeat, repeat);
+    return tex;
+  }
+
+  /** Canvas-based AO/wear texture — procedural dark patches for dirt/grime.
+   *  Falls back to a plain Texture in non-browser (node/test) environments. */
+  private createAoTexture(brightness: number): THREE.Texture {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return new THREE.Texture();
+      const v = Math.floor(brightness * 255);
+      ctx.fillStyle = `rgb(${v},${v},${v})`;
+      ctx.fillRect(0, 0, 128, 128);
+      for (let i = 0; i < 12; i++) {
+        const x = Math.random() * 128;
+        const y = Math.random() * 128;
+        const r = 15 + Math.random() * 25;
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+        const d = Math.floor(brightness * 0.4 * 255);
+        grad.addColorStop(0, `rgba(${d},${d},${d},0.65)`);
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 128, 128);
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      return tex;
+    } catch {
+      return new THREE.Texture();
+    }
+  }
+
+  /**
+   * Load a Poly Haven .hdr file and return a PMREM-prefiltered env texture.
+   * Call this before constructing SceneBuilder, then pass the result as envMap.
+   * Requires a live WebGLRenderer (browser only).
+   */
+  static async loadHdriEnvMap(
+    renderer: THREE.WebGLRenderer,
+    url: string,
+  ): Promise<THREE.Texture> {
+    const { RGBELoader } = await import('three/examples/jsm/loaders/RGBELoader.js');
+    return new Promise<THREE.Texture>((resolve) => {
+      new RGBELoader().load(url, (hdrTex) => {
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        pmrem.compileEquirectangularShader();
+        const envMap = pmrem.fromEquirectangular(hdrTex).texture;
+        hdrTex.dispose();
+        pmrem.dispose();
+        resolve(envMap);
+      });
+    });
+  }
+
+  // ─── Scene construction ───────────────────────────────────────────────────
 
   private createFloor(): void {
     const { width, depth } = GAME_CONFIG.arena;
@@ -39,10 +183,43 @@ export class SceneBuilder {
     }
     geometry.computeVertexNormals();
 
+    // Subtle vertex-color noise overlay (~0.02 amplitude) for macro surface variation
+    const colorData = new Float32Array(positions.count * 3);
+    for (let i = 0; i < positions.count; i++) {
+      const n = 1.0 + (Math.random() - 0.5) * 0.04;
+      colorData[i * 3] = n;
+      colorData[i * 3 + 1] = n;
+      colorData[i * 3 + 2] = n;
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colorData, 3));
+
+    // PBR concrete diffuse — tiled 8×8 across the 50m arena
+    const diffuseMap = this.textureLoader.load(FLOOR_TEXTURE_URL);
+    diffuseMap.wrapS = THREE.RepeatWrapping;
+    diffuseMap.wrapT = THREE.RepeatWrapping;
+    diffuseMap.repeat.set(FLOOR_TEXTURE_REPEAT, FLOOR_TEXTURE_REPEAT);
+
+    // Normal map reuses diffuse texture as a surface-detail stand-in
+    const normalMap = this.textureLoader.load(FLOOR_TEXTURE_URL);
+    normalMap.wrapS = THREE.RepeatWrapping;
+    normalMap.wrapT = THREE.RepeatWrapping;
+    normalMap.repeat.set(FLOOR_TEXTURE_REPEAT, FLOOR_TEXTURE_REPEAT);
+
+    // AO map — grayscale of diffuse acts as an occlusion proxy for creases/pores
+    const aoMap = this.textureLoader.load(FLOOR_TEXTURE_URL);
+    aoMap.wrapS = THREE.RepeatWrapping;
+    aoMap.wrapT = THREE.RepeatWrapping;
+    aoMap.repeat.set(FLOOR_TEXTURE_REPEAT, FLOOR_TEXTURE_REPEAT);
+
     const material = new THREE.MeshStandardMaterial({
-      color: 0x2d5a27,
-      roughness: 0.9,
-      metalness: 0.1,
+      map: diffuseMap,
+      normalMap,
+      roughnessMap: diffuseMap,
+      aoMap,
+      aoMapIntensity: 0.5,
+      roughness: 1.0,
+      metalness: 0.0,
+      vertexColors: true,
     });
 
     const floor = new THREE.Mesh(geometry, material);
@@ -52,7 +229,6 @@ export class SceneBuilder {
     this.scene.add(floor);
     this.meshes.push(floor);
 
-    // Grid lines
     const grid = new THREE.GridHelper(
       Math.min(width, depth), 20, 0x000000, 0x000000,
     );
@@ -65,11 +241,6 @@ export class SceneBuilder {
 
   private createWalls(): void {
     const { width, depth, wallHeight, wallThickness } = GAME_CONFIG.arena;
-    const wallMaterial = new THREE.MeshStandardMaterial({
-      color: 0x4a4a4a,
-      roughness: 0.8,
-      metalness: 0.2,
-    });
 
     const wallDefs: [number, number, number, number, number, number][] = [
       [0, wallHeight / 2, -depth / 2, width + wallThickness * 2, wallHeight, wallThickness],
@@ -80,8 +251,9 @@ export class SceneBuilder {
 
     for (const [px, py, pz, sx, sy, sz] of wallDefs) {
       const geo = new THREE.BoxGeometry(sx, sy, sz);
-      const wall = new THREE.Mesh(geo, wallMaterial);
+      const wall = new THREE.Mesh(geo, this.wallMat);
       wall.position.set(px, py, pz);
+      wall.name = 'wall';
       wall.castShadow = true;
       wall.receiveShadow = true;
       this.scene.add(wall);
@@ -96,16 +268,16 @@ export class SceneBuilder {
       });
     }
 
-    // Corner pillars
+    // Corner pillars — weathered stone matching arena pillar material
     const pillarGeo = new THREE.CylinderGeometry(1, 1.2, wallHeight + 1, 8);
-    const pillarMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.6 });
     const corners: [number, number][] = [
       [-width / 2, -depth / 2], [width / 2, -depth / 2],
       [-width / 2, depth / 2], [width / 2, depth / 2],
     ];
     for (const [cx, cz] of corners) {
-      const pillar = new THREE.Mesh(pillarGeo, pillarMat);
+      const pillar = new THREE.Mesh(pillarGeo, this.pillarMat);
       pillar.position.set(cx, (wallHeight + 1) / 2, cz);
+      pillar.name = 'corner_pillar';
       pillar.castShadow = true;
       pillar.receiveShadow = true;
       this.scene.add(pillar);
@@ -128,9 +300,12 @@ export class SceneBuilder {
   private addCrate(x: number, z: number): void {
     const size = 1.5 + Math.random() * 0.5;
     const geo = new THREE.BoxGeometry(size, size, size);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9 });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(geo, this.crateMat);
     mesh.position.set(x, size / 2, z);
+    // Random y-rotation and slight scale jitter so crates don't grid-align
+    mesh.rotation.y = Math.random() * Math.PI * 2;
+    mesh.scale.setScalar(0.9 + Math.random() * 0.2);
+    mesh.name = 'crate';
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.scene.add(mesh);
@@ -140,14 +315,20 @@ export class SceneBuilder {
 
   private addBarrel(x: number, z: number): void {
     const geo = new THREE.CylinderGeometry(0.5, 0.5, 1.2, 12);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.7, metalness: 0.3 });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(geo, this.barrelMat);
     mesh.position.set(x, 0.6, z);
+    // Random y-rotation; slight z lean for organic placement
+    mesh.rotation.y = Math.random() * Math.PI * 2;
+    mesh.rotation.z = (Math.random() - 0.5) * 0.08;
+    mesh.name = 'barrel';
     mesh.castShadow = true;
     mesh.receiveShadow = true;
 
     const bandGeo = new THREE.CylinderGeometry(0.52, 0.52, 0.2, 12);
-    const bandMat = new THREE.MeshStandardMaterial({ color: Math.random() > 0.5 ? 0xff4444 : 0x44ff44 });
+    const bandColor = Math.random() > 0.5 ? 0xff4444 : 0x44ff44;
+    const bandMat = new THREE.MeshStandardMaterial({
+      color: bandColor, roughness: 0.4, metalness: 0.6,
+    });
     const band = new THREE.Mesh(bandGeo, bandMat);
     band.position.y = 0.3;
     mesh.add(band);
@@ -159,10 +340,10 @@ export class SceneBuilder {
 
   private addLowWall(x: number, z: number): void {
     const geo = new THREE.BoxGeometry(4, 1.2, 0.5);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.8 });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(geo, this.wallMat);
     mesh.position.set(x, 0.6, z);
     mesh.rotation.y = Math.random() * Math.PI;
+    mesh.name = 'low_wall';
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.scene.add(mesh);
@@ -172,9 +353,9 @@ export class SceneBuilder {
 
   private addPillar(x: number, z: number): void {
     const geo = new THREE.CylinderGeometry(0.6, 0.6, 3, 8);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.6 });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = new THREE.Mesh(geo, this.pillarMat);
     mesh.position.set(x, 1.5, z);
+    mesh.name = 'pillar';
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.scene.add(mesh);
@@ -229,18 +410,19 @@ export class SceneBuilder {
     sunLight.shadow.mapSize.height = GAME_CONFIG.rendering.shadowMapSize;
     sunLight.shadow.camera.near = 0.5;
     sunLight.shadow.camera.far = 150;
-    sunLight.shadow.camera.left = -50;
-    sunLight.shadow.camera.right = 50;
-    sunLight.shadow.camera.top = 50;
-    sunLight.shadow.camera.bottom = -50;
-    sunLight.shadow.bias = -0.0001;
+    sunLight.shadow.camera.left = -30;
+    sunLight.shadow.camera.right = 30;
+    sunLight.shadow.camera.top = 30;
+    sunLight.shadow.camera.bottom = -30;
+    sunLight.shadow.bias = -0.0005;
+    sunLight.shadow.normalBias = 0.02;
+    sunLight.shadow.radius = 3;
     this.scene.add(sunLight);
 
     const fillLight = new THREE.DirectionalLight(fill.color, fill.intensity);
     fillLight.position.set(...fill.position);
     this.scene.add(fillLight);
 
-    // Wall-mounted point lights (no shadows for performance)
     const lightPositions: [number, number, number][] = [
       [-15, 4, -15], [15, 4, -15], [-15, 4, 15], [15, 4, 15],
     ];
@@ -258,6 +440,8 @@ export class SceneBuilder {
       this.scene.add(fixture);
       this.meshes.push(fixture);
     }
+
+    this.scene.fog = new THREE.FogExp2(0xc8d0d8, 0.012);
   }
 
   dispose(): void {

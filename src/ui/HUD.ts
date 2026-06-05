@@ -12,6 +12,10 @@ export class HUD {
   private waveBreakOverlay: HTMLDivElement;
   private waveBreakTitle: HTMLSpanElement;
   private waveBreakCountdown: HTMLSpanElement;
+  private audioButton: HTMLButtonElement;
+  private audioPanel: HTMLDivElement;
+  private volumeSlider: HTMLInputElement;
+  private onMasterVolumeChange: ((v: number) => void) | null = null;
 
   constructor() {
     this.container = document.createElement('div');
@@ -27,6 +31,9 @@ export class HUD {
     this.waveBreakOverlay = document.createElement('div');
     this.waveBreakTitle = document.createElement('span');
     this.waveBreakCountdown = document.createElement('span');
+    this.audioButton = document.createElement('button');
+    this.audioPanel = document.createElement('div');
+    this.volumeSlider = document.createElement('input');
     this.init();
   }
 
@@ -125,9 +132,70 @@ export class HUD {
     });
     this.waveBreakOverlay.appendChild(this.waveBreakCountdown);
 
+    this.initAudioControls();
+
     document.body.appendChild(this.container);
     document.body.appendChild(this.topRight);
     document.body.appendChild(this.waveBreakOverlay);
+    document.body.appendChild(this.audioButton);
+    document.body.appendChild(this.audioPanel);
+  }
+
+  /**
+   * A small speaker button (top-left) that toggles a panel holding the master
+   * volume slider. Always visible so the player can mute from any screen.
+   */
+  private initAudioControls(): void {
+    Object.assign(this.audioButton.style, {
+      position: 'fixed', top: '16px', left: '16px',
+      width: '40px', height: '40px', borderRadius: '8px',
+      border: '1px solid rgba(255,255,255,0.2)',
+      backgroundColor: 'rgba(0,0,0,0.55)', color: '#fff',
+      fontSize: '18px', cursor: 'pointer', zIndex: '2300',
+      pointerEvents: 'auto', lineHeight: '1',
+    });
+    this.audioButton.textContent = '🔊';
+    this.audioButton.setAttribute('aria-label', 'Audio settings');
+
+    Object.assign(this.audioPanel.style, {
+      position: 'fixed', top: '64px', left: '16px',
+      display: 'none', flexDirection: 'column', gap: '6px',
+      padding: '12px 14px', borderRadius: '8px',
+      border: '1px solid rgba(255,255,255,0.2)',
+      backgroundColor: 'rgba(0,0,0,0.75)', color: '#fff',
+      fontFamily: "'Segoe UI', Arial, sans-serif", fontSize: '12px',
+      zIndex: '2300', pointerEvents: 'auto', userSelect: 'none',
+      minWidth: '160px',
+    });
+
+    const label = document.createElement('span');
+    label.textContent = 'MASTER VOLUME';
+    Object.assign(label.style, { color: '#aaa', fontSize: '10px', letterSpacing: '2px', fontWeight: '600' });
+    this.audioPanel.appendChild(label);
+
+    this.volumeSlider.type = 'range';
+    this.volumeSlider.min = '0';
+    this.volumeSlider.max = '100';
+    this.volumeSlider.value = '100';
+    Object.assign(this.volumeSlider.style, { width: '100%', cursor: 'pointer' });
+    this.audioPanel.appendChild(this.volumeSlider);
+
+    const toggle = () => {
+      const open = this.audioPanel.style.display !== 'none';
+      this.audioPanel.style.display = open ? 'none' : 'flex';
+    };
+    this.audioButton.addEventListener('click', toggle);
+
+    this.volumeSlider.addEventListener('input', () => {
+      const v = Number(this.volumeSlider.value) / 100;
+      this.audioButton.textContent = v === 0 ? '🔇' : '🔊';
+      if (this.onMasterVolumeChange) this.onMasterVolumeChange(v);
+    });
+  }
+
+  /** Wire the master-volume slider to a sink (the AudioManager in the game). */
+  setOnMasterVolumeChange(cb: (v: number) => void): void {
+    this.onMasterVolumeChange = cb;
   }
 
   show(): void {
@@ -192,5 +260,7 @@ export class HUD {
     if (document.body.contains(this.container)) document.body.removeChild(this.container);
     if (document.body.contains(this.topRight)) document.body.removeChild(this.topRight);
     if (document.body.contains(this.waveBreakOverlay)) document.body.removeChild(this.waveBreakOverlay);
+    if (document.body.contains(this.audioButton)) document.body.removeChild(this.audioButton);
+    if (document.body.contains(this.audioPanel)) document.body.removeChild(this.audioPanel);
   }
 }

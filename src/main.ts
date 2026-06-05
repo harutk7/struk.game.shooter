@@ -1,4 +1,10 @@
 import { Game } from './game/Game';
+import { assetManifest } from './assets/assetManifest';
+import { getAudioManager } from './audio/AudioManager';
+import { getWeaponSFX } from './audio/WeaponSFX';
+import { getFootstepSFX } from './audio/FootstepSFX';
+import { getDamageSFX } from './audio/DamageSFX';
+import { getBotVoice } from './audio/BotVoice';
 
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('game-container');
@@ -9,9 +15,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
   try {
     const game = new Game(container);
+    // Kick off asset preloading; manifest is empty until later tasks populate it.
+    game.assetLoader.preloadManifest(assetManifest);
     // Expose for debugging
     (window as any).__game = game;
   } catch (err) {
     console.error('Failed to initialize game:', err);
   }
+
+  // The browser autoplay policy forbids creating/resuming an AudioContext
+  // outside a user gesture, so we lazily initialize the AudioManager on the
+  // first click or keypress and preload the placeholder SFX.
+  let audioInitialized = false;
+  const initAudio = () => {
+    if (audioInitialized) return;
+    audioInitialized = true;
+    const audio = getAudioManager();
+    const base = import.meta.env.BASE_URL ?? '/';
+    void audio.resume();
+    void audio.loadSound('tick', `${base}sounds/tick.wav`).catch(() => {});
+    void audio.loadSound('ping', `${base}sounds/ping.wav`).catch(() => {});
+    // Per-weapon gunfire + hit-marker SFX (T14).
+    void getWeaponSFX().loadAll(base);
+    // Preload footstep + ambient SFX (T15) so they're ready by match start.
+    void getFootstepSFX().loadAll(base).catch(() => {});
+    // Preload damage SFX (T16): player pain, bot death, bullet impact.
+    void getDamageSFX().loadAll(base).catch(() => {});
+    // Preload bot voice callout clips (T19).
+    void getBotVoice().preload(base);
+  };
+  window.addEventListener('pointerdown', initAudio);
+  window.addEventListener('keydown', initAudio);
 });

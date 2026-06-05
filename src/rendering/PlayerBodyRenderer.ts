@@ -19,17 +19,41 @@ import * as THREE from 'three';
 import { GAME_CONFIG } from '../core/GameConfig';
 import type { WeaponType } from '../models/Weapon';
 import { buildWeaponModel, disposeWeaponModel } from './WeaponModels';
+import { getRecoilProfile } from '../assets/weaponProfiles';
+
+const DEG2RAD = Math.PI / 180;
+/** ±metres of viewmodel position jitter at full shake intensity. */
+const SHAKE_AMPLITUDE = 0.002;
+/** Duration of the per-shot viewmodel shake, in seconds. */
+const SHAKE_DURATION = 0.1;
+/** Scales a profile's vertical kick (deg) into the weapon-group local +z back-rotation. */
+const WEAPON_KICK_SCALE = 1.0;
 
 /** Material palette — kept simple and "tactical" looking. */
 const COLORS = {
   skin: 0xd9b48a,
+  handSkin: 0xc68a5a, // warmer, more realistic flesh tone for the hands (T6)
   shirt: 0x3a4a3a,
   pants: 0x232a23,
   boots: 0x1a1a1a,
   gloves: 0x2a2a2a,
+  glove: 0x1c1c1c, // dark tactical glove overlay (T6)
   helmet: 0x2c342c,
   webbing: 0x4a3a2a,
 };
+
+/** Skin material for hand parts — PBR so it picks up the HDRI (T4/T6). */
+function handSkinMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: COLORS.handSkin, roughness: 0.6, metalness: 0.0 });
+}
+
+/** Dark glove material overlaid on the back of the hand + wrist (T6). */
+function gloveMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: COLORS.glove, roughness: 0.9, metalness: 0.0 });
+}
+
+/** Resting curl applied to fingers when idle (~30°, negative = curl toward palm). */
+const FINGER_BASE_CURL = -0.52;
 
 /** State machine for the visible weapon animation. */
 type WeaponAnimState = 'idle' | 'reloading' | 'switchingDown' | 'switchingUp';
@@ -53,6 +77,22 @@ export interface BodyTickParams {
   isSprinting: boolean;
   /** cumulative walk distance (used to phase limb swing) */
   walkPhase: number;
+  /** current camera pitch (radians) — drives subtle wrist follow (T6) */
+  cameraPitch?: number;
+  /** current camera yaw (radians) — drives subtle wrist follow (T6) */
+  cameraYaw?: number;
+}
+
+/** A finger's two animated segments + metadata for procedural curl. */
+interface FingerRig {
+  /** Proximal segment group (knuckle pivot). */
+  prox: THREE.Group;
+  /** Distal segment group (mid-knuckle pivot), null for the thumb. */
+  dist: THREE.Group | null;
+  /** True for the trigger finger (straightens on recoil). */
+  isIndex: boolean;
+  /** Resting curl for this digit. */
+  baseCurl: number;
 }
 
 export class PlayerBodyRenderer {
@@ -65,6 +105,20 @@ export class PlayerBodyRenderer {
   private readonly leftLeg: THREE.Group;
   private readonly rightLeg: THREE.Group;
   private readonly weaponAnchor: THREE.Group;
+  /** Holds the weapon model; carries spring-damped recoil rotation + shake. */
+  private readonly weaponGroup: THREE.Group;
+
+  // Hand rig (T6): wrist groups + per-finger segments for procedural animation
+  private leftWrist!: THREE.Group;
+  private rightWrist!: THREE.Group;
+  private leftWristBaseRot = { x: 0, y: 0 };
+  private rightWristBaseRot = { x: 0, y: 0 };
+  private readonly fingers: FingerRig[] = [];
+  // Smoothed wrist "follow the look" offsets + previous camera angles
+  private prevCamYaw = 0;
+  private prevCamPitch = 0;
+  private wristLookX = 0;
+  private wristLookY = 0;
 
   // Cached base local positions (for blending between idle/walk/crouch)
   private readonly headBaseY: number;
@@ -77,9 +131,23 @@ export class PlayerBodyRenderer {
   // Smoothed movement state
   private breathPhase = 0;
   private crouchBlend = 0; // 0 = standing, 1 = crouched
-  private recoilKick = 0;   // 0..1 decays to 0
+  private recoilKick = 0;   // 0..1 decays to 0 (drives the arm/body kick)
   private recoilYaw = 0;    // small random yaw on each shot
   private recoilPitch = 0;  // upward pitch on each shot
+
+  // ── Per-weapon spring-damped recoil accumulators (T11) ───
+  // All are in radians, accumulate per shot, and spring back toward 0 over
+  // the active profile's recovery time. They DON'T snap back instantly, so
+  // sustained automatic fire climbs and then settles during the cooldown.
+  private recoilCamPitch = 0;   // camera up-kick (added to caller's pitch)
+  private recoilCamYaw = 0;     // camera side-kick (added to caller's yaw)
+  private recoilWeaponZ = 0;    // weapon group local +z back-rotation
+  private recoilRecoverMs = 150; // recovery time of the last-fired weapon
+  private recoilMaxZ = 0.25;     // cap for weapon back-rotation (rad)
+  private recoilMaxCamPitch = 0.25; // cap for camera up-kick (rad)
+  private recoilShot = 0;        // shot counter (drives horizontal pattern)
+  private shakeTimer = 0;        // seconds remaining on the viewmodel shake
+  private shakeIntensity = 0;    // 0..1 shake scale from the active profile
 
   // Weapon rig state
   private currentWeaponType: WeaponType = 'PISTOL';
@@ -158,21 +226,32 @@ export class PlayerBodyRenderer {
     this.headBaseY = this.head.position.y;
 
     // ── Left arm (player's left → camera-right when facing -Z) ──
-    this.leftArm = this.buildArm();
+    this.leftArm = this.buildArm('left');
     this.leftArm.position.set(0.34, 0.15, 0.0);
     this.root.add(this.leftArm);
     this.leftArmRest = this.leftArm.position.clone();
+    this.leftWrist = this.leftArm.userData.wrist as THREE.Group;
+    this.leftWristBaseRot = { x: this.leftWrist.rotation.x, y: this.leftWrist.rotation.y };
 
     // ── Right arm (weapon arm) ───────────────────────────────
-    this.rightArm = this.buildArm();
+    this.rightArm = this.buildArm('right');
     this.rightArm.position.set(-0.34, 0.15, 0.0);
     this.root.add(this.rightArm);
     this.rightArmRest = this.rightArm.position.clone();
+    this.rightWrist = this.rightArm.userData.wrist as THREE.Group;
+    this.rightWristBaseRot = { x: this.rightWrist.rotation.x, y: this.rightWrist.rotation.y };
 
-    // Weapon anchor: attached to the right forearm, weapons parent to this
+    // Weapon anchor: attached to the right forearm, weapons parent to this.
+    // The anchor carries switch/reload/raise motion; the inner weaponGroup
+    // carries the spring-damped recoil (back-rotation + shake) so the two
+    // never fight each other.
     this.weaponAnchor = new THREE.Group();
     this.weaponAnchor.position.set(0, -0.22, 0.05);
     this.rightArm.add(this.weaponAnchor);
+
+    this.weaponGroup = new THREE.Group();
+    this.weaponGroup.name = 'weaponRecoilGroup';
+    this.weaponAnchor.add(this.weaponGroup);
 
     // Build the default weapon (PISTOL) immediately so FPV is never empty
     this.setWeaponModel('PISTOL');
@@ -192,7 +271,7 @@ export class PlayerBodyRenderer {
   /** Swap the visible weapon model. */
   private setWeaponModel(type: WeaponType): void {
     if (this.currentWeaponModel) {
-      this.weaponAnchor.remove(this.currentWeaponModel);
+      this.weaponGroup.remove(this.currentWeaponModel);
       disposeWeaponModel(this.currentWeaponModel);
     }
     // RIFLE and SNIPER get a procedural camo by default (T5 polish).
@@ -203,7 +282,7 @@ export class PlayerBodyRenderer {
     const a = WEAPON_ANCHOR[type];
     model.position.set(a.x, a.y, a.z);
     model.rotation.x = a.rotX;
-    this.weaponAnchor.add(model);
+    this.weaponGroup.add(model);
     this.currentWeaponModel = model;
     this.currentWeaponType = type;
   }
@@ -266,12 +345,70 @@ export class PlayerBodyRenderer {
 
   /**
    * Drive recoil animation when the player fires.
-   * Magnitude is in arbitrary units; the body normalizes it.
+   *
+   * @param weaponKey  archetype key (`'ak'`) or in-game weapon type (`'RIFLE'`);
+   *                   selects the per-weapon recoil profile.
+   * @param magnitude  shot strength multiplier (1.0 = a full kick).
+   * @param randomYaw  extra random body-twist amount (legacy body feel).
+   *
+   * Each call ACCUMULATES onto the camera, weapon-group and shake springs
+   * (capped per profile) and advances the horizontal recoil pattern. The
+   * springs are released over the profile's `recoveryMs` in {@link tick}, so
+   * sustained fire climbs and recovery is damped rather than instant.
    */
-  addRecoil(magnitude: number, randomYaw: number): void {
+  addRecoil(weaponKey: string, magnitude: number, randomYaw: number): void {
+    const profile = getRecoilProfile(weaponKey);
+
+    // Legacy arm/body kick (still drives the visible arm recoil).
     this.recoilKick = Math.min(1.0, this.recoilKick + magnitude);
     this.recoilYaw = (Math.random() - 0.5) * randomYaw;
     this.recoilPitch = (0.3 + Math.random() * 0.3) * magnitude;
+
+    // ── Camera + weapon-group spring targets ──
+    const vertical = profile.verticalKick * DEG2RAD * magnitude;
+    const sign = profile.horizontalPattern.length
+      ? profile.horizontalPattern[this.recoilShot % profile.horizontalPattern.length]
+      : 1;
+    const horizontal = profile.horizontalKick * DEG2RAD * magnitude * sign;
+
+    this.recoilMaxZ = profile.maxAccumulationDeg * DEG2RAD * WEAPON_KICK_SCALE;
+    this.recoilMaxCamPitch = profile.maxAccumulationDeg * DEG2RAD;
+
+    this.recoilCamPitch = Math.min(this.recoilMaxCamPitch, this.recoilCamPitch + vertical);
+    this.recoilCamYaw = Math.max(
+      -this.recoilMaxCamPitch,
+      Math.min(this.recoilMaxCamPitch, this.recoilCamYaw + horizontal),
+    );
+    this.recoilWeaponZ = Math.min(
+      this.recoilMaxZ,
+      this.recoilWeaponZ + vertical * WEAPON_KICK_SCALE,
+    );
+
+    this.recoilRecoverMs = profile.recoveryMs;
+
+    // Viewmodel shake — random position jitter that decays over SHAKE_DURATION.
+    this.shakeTimer = SHAKE_DURATION;
+    this.shakeIntensity = profile.shake;
+
+    this.recoilShot++;
+
+    // Apply the weapon back-rotation immediately so the kick is visible even
+    // before the next tick (and so unit tests can observe it synchronously).
+    this.weaponGroup.rotation.z = this.recoilWeaponZ;
+  }
+
+  /** The group carrying the spring-damped weapon recoil (back-rotation + shake). */
+  getWeaponGroup(): THREE.Group {
+    return this.weaponGroup;
+  }
+
+  /**
+   * Current spring-damped camera recoil offset (radians). The caller should
+   * ADD these to the look pitch/yaw when composing the camera orientation.
+   * `pitch` is positive = view kicks up.
+   */
+  getCameraRecoil(): { pitch: number; yaw: number } {
+    return { pitch: this.recoilCamPitch, yaw: this.recoilCamYaw };
   }
 
   /**
@@ -304,8 +441,31 @@ export class PlayerBodyRenderer {
     const speedFactor = isMoving ? (isSprinting ? 1.4 : 1.0) : 0.0;
     const swing = Math.sin(walkPhase) * 0.6 * speedFactor;
 
-    // Recoil decay
+    // Recoil decay (legacy arm/body kick)
     this.recoilKick = Math.max(0, this.recoilKick - dt * 6);
+
+    // ── Spring-damped recovery of the per-weapon recoil accumulators ──
+    // Lerp every accumulator toward rest with a time constant equal to the
+    // active weapon's recoveryMs, so a snappy MP5 settles far faster than an
+    // AK. This is the "spring back" half of the kick — never instant.
+    const tau = Math.max(0.001, this.recoilRecoverMs / 1000);
+    const recover = Math.min(1, dt / tau);
+    this.recoilCamPitch += -this.recoilCamPitch * recover;
+    this.recoilCamYaw += -this.recoilCamYaw * recover;
+    this.recoilWeaponZ += -this.recoilWeaponZ * recover;
+
+    // Viewmodel shake: random jitter for SHAKE_DURATION, decaying linearly.
+    let shakeX = 0;
+    let shakeY = 0;
+    if (this.shakeTimer > 0) {
+      this.shakeTimer = Math.max(0, this.shakeTimer - dt);
+      const decay = this.shakeTimer / SHAKE_DURATION; // 1 → 0
+      const amp = SHAKE_AMPLITUDE * this.shakeIntensity * decay;
+      shakeX = (Math.random() - 0.5) * 2 * amp;
+      shakeY = (Math.random() - 0.5) * 2 * amp;
+    }
+    this.weaponGroup.rotation.z = this.recoilWeaponZ;
+    this.weaponGroup.position.set(shakeX, shakeY, 0);
 
     // ── Legs ─────────────────────────────────────────────
     const legLift = isMoving ? Math.sin(walkPhase) * 0.25 * speedFactor : 0;
@@ -421,6 +581,47 @@ export class PlayerBodyRenderer {
       }
     }
 
+    // ── Finger curl (T6) ─────────────────────────────────
+    // Fingers rest slightly curled around the grip. During reload they open
+    // (mag out) then close (mag in); the trigger finger straightens on recoil.
+    let reloadOpen = 0;
+    if (this.weaponAnimState === 'reloading') {
+      reloadOpen = this.reloadPhase === 'magOut'
+        ? Math.min(1, this.reloadMagOut)
+        : Math.max(0, 1 - this.reloadMagIn);
+    }
+    for (const f of this.fingers) {
+      let curl = f.baseCurl * (1 - reloadOpen);
+      if (f.isIndex) curl *= 1 - 0.85 * this.recoilKick; // trigger finger snaps straight on the shot
+      f.prox.rotation.x = curl;
+      if (f.dist) f.dist.rotation.x = curl * 0.8;
+    }
+
+    // ── Wrist follows the look (T6) ──────────────────────
+    // Tie a small wrist rotation to the *rate of change* of camera pitch/yaw
+    // so the hands lag the look a touch — alive, not slavish. Returns to rest
+    // as soon as the look settles (rate → 0).
+    const camYaw = params.cameraYaw ?? 0;
+    const camPitch = params.cameraPitch ?? 0;
+    const yawRate = (camYaw - this.prevCamYaw) / Math.max(dt, 1e-3);
+    const pitchRate = (camPitch - this.prevCamPitch) / Math.max(dt, 1e-3);
+    this.prevCamYaw = camYaw;
+    this.prevCamPitch = camPitch;
+    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+    const targetWy = clamp(-yawRate * 0.02, -0.15, 0.15);
+    const targetWx = clamp(pitchRate * 0.02, -0.12, 0.12);
+    const k = Math.min(1, dt * 8);
+    this.wristLookY += (targetWy - this.wristLookY) * k;
+    this.wristLookX += (targetWx - this.wristLookX) * k;
+    if (this.leftWrist) {
+      this.leftWrist.rotation.x = this.leftWristBaseRot.x + this.wristLookX;
+      this.leftWrist.rotation.y = this.leftWristBaseRot.y + this.wristLookY;
+    }
+    if (this.rightWrist) {
+      this.rightWrist.rotation.x = this.rightWristBaseRot.x + this.wristLookX;
+      this.rightWrist.rotation.y = this.rightWristBaseRot.y + this.wristLookY;
+    }
+
     // ── Head bob (return value — applied to camera) ──────
     const bobY = isMoving
       ? Math.abs(Math.sin(walkPhase * 2)) * cfg.bobAmplitude * speedFactor
@@ -438,7 +639,7 @@ export class PlayerBodyRenderer {
   }
 
   // ────────────────────────────────────────────────────────
-  private buildArm(): THREE.Group {
+  private buildArm(side: 'left' | 'right'): THREE.Group {
     const arm = new THREE.Group();
     // Upper arm
     const upper = new THREE.Mesh(
@@ -458,17 +659,109 @@ export class PlayerBodyRenderer {
     lower.position.y = -0.13;
     lower.castShadow = true;
     forearm.add(lower);
-    // Glove on the hand
-    const hand = new THREE.Mesh(
-      new THREE.BoxGeometry(0.11, 0.08, 0.11),
-      new THREE.MeshStandardMaterial({ color: COLORS.gloves, roughness: 0.8 }),
-    );
-    hand.position.y = -0.30;
-    hand.castShadow = true;
-    forearm.add(hand);
+
+    // ── Procedural hand on a wrist group (T6) ──────────────
+    const wrist = this.buildHand(side);
+    if (side === 'right') {
+      // Lift the wrist up to the weapon grip anchor so the right hand
+      // wraps the grip (anchor sits at arm-local (0,-0.22,0.05); forearm
+      // origin is at (0,-0.28,0)). No gap between palm and grip.
+      wrist.position.set(0, 0.06, 0.05);
+      wrist.rotation.set(0.12, 0, 0);
+    } else {
+      // Support hand: rests forward at the end of the forearm (ready pose;
+      // reaches the rifle handguard once T7 lands).
+      wrist.position.set(0, -0.24, 0.02);
+      wrist.rotation.set(0.22, 0, 0);
+    }
+    forearm.add(wrist);
+
     arm.add(forearm);
     arm.userData.forearm = forearm;
+    arm.userData.wrist = wrist;
     return arm;
+  }
+
+  /**
+   * Build a small procedural hand: palm + 4 two-segment fingers + thumb,
+   * plus a dark glove overlay on the back of the hand and the wrist cuff.
+   * Returns the wrist group (parent this to the forearm). Finger segments
+   * are registered in `this.fingers` for procedural curl in tick().
+   */
+  private buildHand(side: 'left' | 'right'): THREE.Group {
+    const wrist = new THREE.Group();
+    wrist.name = 'wrist';
+
+    // Palm — fingers extend toward -Z (forward).
+    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.03, 0.085), handSkinMaterial());
+    palm.name = 'palm';
+    palm.position.set(0, -0.015, -0.01);
+    palm.castShadow = true;
+    wrist.add(palm);
+
+    // Glove overlay: back of the hand …
+    const gloveBack = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.012, 0.10), gloveMaterial());
+    gloveBack.name = 'glove';
+    gloveBack.position.set(0, 0.005, 0.0);
+    gloveBack.castShadow = true;
+    wrist.add(gloveBack);
+    // … extended to the wrist as a cuff.
+    const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.045), gloveMaterial());
+    cuff.name = 'glove_cuff';
+    cuff.position.set(0, -0.005, 0.055);
+    cuff.castShadow = true;
+    wrist.add(cuff);
+
+    // Four fingers across the front edge of the palm. Index sits toward the
+    // thumb side so it can reach a trigger.
+    const names = ['index', 'middle', 'ring', 'pinky'];
+    const xs = side === 'right'
+      ? [0.028, 0.0095, -0.0095, -0.028]
+      : [-0.028, -0.0095, 0.0095, 0.028];
+    for (let i = 0; i < 4; i++) {
+      wrist.add(this.buildFinger(names[i], xs[i]));
+    }
+
+    // Thumb — angled in from the side of the palm (single segment).
+    const thumb = new THREE.Group();
+    thumb.name = 'thumb';
+    const thumbX = side === 'right' ? 0.05 : -0.05;
+    thumb.position.set(thumbX, -0.01, -0.005);
+    thumb.rotation.set(0, side === 'right' ? -0.5 : 0.5, side === 'right' ? 0.5 : -0.5);
+    const thumbMesh = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.016, 0.04), handSkinMaterial());
+    thumbMesh.position.z = -0.02;
+    thumbMesh.castShadow = true;
+    thumb.add(thumbMesh);
+    wrist.add(thumb);
+    this.fingers.push({ prox: thumb, dist: null, isIndex: false, baseCurl: FINGER_BASE_CURL * 0.5 });
+
+    return wrist;
+  }
+
+  /** Build one two-segment finger; registers both segments for curl. */
+  private buildFinger(name: string, x: number): THREE.Group {
+    const segLen = 0.034;
+    const width = 0.016;
+    // Proximal segment — pivots at the knuckle on the front edge of the palm.
+    const prox = new THREE.Group();
+    prox.name = `${name}_proximal`;
+    prox.position.set(x, -0.012, -0.045);
+    const proxMesh = new THREE.Mesh(new THREE.BoxGeometry(width, width, segLen), handSkinMaterial());
+    proxMesh.position.z = -segLen / 2;
+    proxMesh.castShadow = true;
+    prox.add(proxMesh);
+    // Distal segment — child of proximal so it follows + adds its own curl.
+    const dist = new THREE.Group();
+    dist.name = `${name}_distal`;
+    dist.position.z = -segLen;
+    const distLen = segLen * 0.85;
+    const distMesh = new THREE.Mesh(new THREE.BoxGeometry(width * 0.9, width * 0.9, distLen), handSkinMaterial());
+    distMesh.position.z = -distLen / 2;
+    distMesh.castShadow = true;
+    dist.add(distMesh);
+    prox.add(dist);
+    this.fingers.push({ prox, dist, isIndex: name === 'index', baseCurl: FINGER_BASE_CURL });
+    return prox;
   }
 
   private buildLeg(): THREE.Group {

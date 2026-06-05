@@ -1,6 +1,30 @@
 /* Ambient type declarations for Three.js 0.173 */
 
+declare module 'three/examples/jsm/environments/RoomEnvironment.js' {
+  import * as THREE from 'three';
+  export class RoomEnvironment extends THREE.Scene {
+    constructor();
+    dispose(): void;
+  }
+}
+
 declare module 'three' {
+  export class Vector2 {
+    constructor(x?: number, y?: number);
+    x: number; y: number;
+    set(x: number, y: number): this;
+  }
+
+  export class BufferAttribute {
+    constructor(array: Float32Array | Uint16Array | Uint32Array, itemSize: number);
+    count: number;
+    itemSize: number;
+    array: Float32Array | Uint16Array | Uint32Array;
+    getX(i: number): number;
+    getY(i: number): number;
+    setZ(i: number, v: number): void;
+  }
+
   export class Vector3 {
     constructor(x?: number, y?: number, z?: number);
     x: number; y: number; z: number;
@@ -30,6 +54,7 @@ declare module 'three' {
     constructor(x?: number, y?: number, z?: number, w?: number);
     x: number; y: number; z: number; w: number;
     setFromEuler(e: Euler): this;
+    copy(q: Quaternion): this;
   }
 
   export class Color {
@@ -43,6 +68,8 @@ declare module 'three' {
     constructor(min?: Vector3, max?: Vector3);
     min: Vector3; max: Vector3;
     setFromObject(obj: Object3D): this;
+    getSize(target: Vector3): Vector3;
+    getCenter(target: Vector3): Vector3;
   }
 
   export class Raycaster {
@@ -93,11 +120,18 @@ declare module 'three' {
   }
 
   export class Scene extends Object3D {
-    fog: Fog | null;
+    fog: Fog | FogExp2 | null;
+    environment: Texture | null;
+    background: Texture | Color | null;
   }
 
   export class Fog {
     constructor(color: number, near?: number, far?: number);
+  }
+
+  export class FogExp2 {
+    constructor(color: number, density?: number);
+    density: number;
   }
 
   export class WebGLRenderer {
@@ -114,7 +148,12 @@ declare module 'three' {
   }
 
   export class BufferGeometry {
-    attributes: { position: { count: number; getX(i: number): number; getY(i: number): number; setZ(i: number, v: number): void } };
+    attributes: {
+      position: BufferAttribute & { count: number; getX(i: number): number; getY(i: number): number; setZ(i: number, v: number): void };
+      uv?: BufferAttribute;
+      color?: BufferAttribute;
+    };
+    setAttribute(name: string, attribute: BufferAttribute): this;
     setFromPoints(points: Vector3[]): this;
     computeVertexNormals(): void;
     dispose(): void;
@@ -148,6 +187,7 @@ declare module 'three' {
     side: number;
     depthWrite: boolean;
     depthTest: boolean;
+    fog: boolean;
     dispose(): void;
   }
 
@@ -158,12 +198,22 @@ declare module 'three' {
     emissive: Color;
     emissiveIntensity: number;
     map: Texture | null;
+    envMap: Texture | null;
+    envMapIntensity: number;
     needsUpdate: boolean;
+    normalMap: Texture | null;
+    roughnessMap: Texture | null;
+    aoMap: Texture | null;
+    aoMapIntensity: number;
+    vertexColors: boolean;
     constructor(params?: Record<string, any>);
   }
 
   export class MeshBasicMaterial extends Material {
     color: Color;
+    map: Texture | null;
+    blending: number;
+    needsUpdate: boolean;
     constructor(params?: Record<string, any>);
   }
 
@@ -196,6 +246,7 @@ declare module 'three' {
     material: Material | Material[];
     castShadow: boolean;
     receiveShadow: boolean;
+    readonly isMesh: boolean;
     constructor(geometry?: BufferGeometry, material?: Material | Material[]);
   }
 
@@ -231,29 +282,65 @@ declare module 'three' {
       mapSize: { width: number; height: number };
       camera: { near: number; far: number; left: number; right: number; top: number; bottom: number };
       bias: number;
+      normalBias: number;
+      radius: number;
     };
     constructor(color?: number, intensity?: number);
+  }
+
+  export class PMREMGenerator {
+    constructor(renderer: WebGLRenderer);
+    compileEquirectangularShader(): void;
+    fromEquirectangular(texture: Texture): { texture: Texture };
+    fromScene(scene: Scene, sigma?: number, near?: number, far?: number): { texture: Texture };
+    dispose(): void;
   }
 
   export class PointLight extends Object3D {
     castShadow: boolean;
     shadow: { mapSize: { width: number; height: number } };
     visible: boolean;
+    intensity: number;
+    distance: number;
+    color: Color;
     constructor(color?: number, intensity?: number, distance?: number);
   }
 
   export class Texture {
-    constructor(canvas?: HTMLCanvasElement);
-    dispose(): void;
+    constructor(image?: HTMLCanvasElement | null);
     wrapS: number;
     wrapT: number;
-    repeat: { x: number; y: number; set(x: number, y: number): void };
+    repeat: Vector2;
+    needsUpdate: boolean;
     magFilter: number;
     minFilter: number;
+    mapping: number;
+    colorSpace: string;
+    image: any;
+    dispose(): void;
   }
 
   export class CanvasTexture extends Texture {
     constructor(canvas: HTMLCanvasElement);
+  }
+
+  export class TextureLoader {
+    load(
+      url: string,
+      onLoad?: (texture: Texture) => void,
+      onProgress?: (event: ProgressEvent) => void,
+      onError?: (err: unknown) => void,
+    ): Texture;
+  }
+
+  export class DataTexture extends Texture {
+    constructor(
+      data?: ArrayBufferView,
+      width?: number,
+      height?: number,
+      format?: number,
+      type?: number,
+    );
   }
 
   export const MathUtils: {
@@ -272,4 +359,26 @@ declare module 'three' {
   export const RepeatWrapping: number;
   export const NearestFilter: number;
   export const LinearFilter: number;
+  export const RGBAFormat: number;
+  export const EquirectangularReflectionMapping: number;
+}
+
+declare module 'three/examples/jsm/loaders/RGBELoader' {
+  import { Texture } from 'three';
+
+  export class RGBELoader {
+    load(
+      url: string,
+      onLoad?: (texture: Texture) => void,
+      onProgress?: (event: ProgressEvent) => void,
+      onError?: (err: unknown) => void,
+    ): void;
+  }
+}
+
+declare module 'three/examples/jsm/loaders/RGBELoader.js' {
+  import * as THREE from 'three';
+  export class RGBELoader {
+    load(url: string, onLoad: (texture: THREE.Texture) => void): void;
+  }
 }

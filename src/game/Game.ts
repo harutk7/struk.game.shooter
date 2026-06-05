@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { EventBus } from '../core/EventBus';
 import type { GameEvents } from '../core/GameEvents';
+import { AssetLoader } from '../assets/AssetLoader';
 import { GameState } from '../core/GameState';
 import { GAME_CONFIG } from '../core/GameConfig';
 import { InputSystem } from '../systems/InputSystem';
@@ -44,8 +45,15 @@ import type { WaveState } from '../models/WaveManager';
 import type { WavePhase } from '../models/WaveManager';
 import { createWaveState, tickWave, registerKill } from '../models/WaveManager';
 import { getWeaponConfig } from '../models/Weapon';
+import { getAudioManager } from '../audio/AudioManager';
+import { getWeaponSFX } from '../audio/WeaponSFX';
+import { getFootstepSFX } from '../audio/FootstepSFX';
+import { getDamageSFX } from '../audio/DamageSFX';
+import type { ImpactSurface } from '../audio/DamageSFX';
+import { getBotVoice } from '../audio/BotVoice';
 
 export class Game {
+  private _assetLoader = new AssetLoader();
   private bus = new EventBus<GameEvents>();
   private state = new GameState();
   private input: InputSystem;
@@ -90,8 +98,11 @@ export class Game {
   private horizontalSpeed = 0;
   // Throttle for empty-click SFX so a held trigger doesn't spam
   private lastEmptyClickAt = -10;
-  // Cached AudioContext for the empty-click SFX (lazy-initialized)
-  private audioCtx: AudioContext | null = null;
+  // Footstep + ambient soundscape (T15). Rate-limiting lives inside the SFX layer.
+  private footsteps = getFootstepSFX();
+  // Damage SFX (T16): player pain, bot death scream, bullet impact. Rate-limited
+  // inside the SFX layer.
+  private damageSfx = getDamageSFX();
   // Track wave transitions so events are emitted exactly once
   private prevWavePhase: WavePhase = 'spawning';
   private prevWaveNumber = 1;
@@ -139,6 +150,7 @@ export class Game {
     }
 
     this.wireEvents();
+    this.hud.setOnMasterVolumeChange((v) => getAudioManager().setMasterVolume(v));
     this.startScreen.setOnClick(() => this.startGame());
     this.startScreen.setOnDeathmatchClick(() => this.startDeathmatch());
     this.gameOverScreen.setOnRestart(() => this.restartGame());
@@ -173,6 +185,8 @@ export class Game {
       this.effects.flashDamage();
       this.effects.triggerShake(0.05, 0.15);
       this.crosshair.flashHit();
+      // Pain grunt (T16) — volume scales with the hit, rate-limited to one per 0.5s.
+      this.damageSfx.playPlayerPain(d.amount);
     });
     this.bus.on('playerHealed', (d) => this.hud.updateHealth(d.currentHealth, this.player.maxHealth));
     this.bus.on('playerDied', () => this.handleGameOver());
@@ -213,6 +227,16 @@ export class Game {
 
     // ── Deathmatch event wiring (T4) ──
     this.bus.on('botKilled', (d) => {
+      // Death scream SFX (T16) — the guttural die sound from the victim's
+      // position (distinct from T19's "got the kill" callout). Only for actual
+      // bots; the player's own death is handled by the pain/HUD paths.
+      if (d.id !== 'player') {
+        const bot = this.bots.find((b) => b.id === d.id);
+        const deathPos: [number, number, number] = bot
+          ? [bot.position.x, bot.position.y, bot.position.z]
+          : [d.position.x, 1, d.position.z];
+        this.damageSfx.playBotDeath(d.id, deathPos);
+      }
       if (!this.match) return;
       // d.killerId may be 'player' (player killed this bot) or a bot id
       const killerIsPlayer = d.killerId === 'player';
@@ -222,6 +246,18 @@ export class Game {
       const victimName = victimIsPlayer ? 'You' : (d.name ?? '?');
       this.killFeed.addDeathmatchKill(killerName, victimName, getWeaponConfig(d.weaponType).name, killerIsPlayer, victimIsPlayer);
     });
+  }
+
+  /**
+   * Preload footstep SFX and start the ambient bed (fades in over 2s). Called
+   * when a game/match begins — by then we're inside a user gesture, so the
+   * AudioContext is allowed to run. Idempotent and fire-and-forget.
+   */
+  private startSoundscape(): void {
+    const base = import.meta.env.BASE_URL ?? '/';
+    void this.footsteps.loadAll(base);
+    void this.footsteps.startAmbient();
+    void this.damageSfx.loadAll(base);
   }
 
   private startGame(): void {
@@ -246,6 +282,7 @@ export class Game {
     }
     this.prevWavePhase = 'spawning';
     this.prevWaveNumber = 1;
+    this.startSoundscape();
     cancelAnimationFrame(this.animFrameId);
     this.lastTime = performance.now();
     this.loop();
@@ -311,6 +348,13 @@ export class Game {
     this.matchHUD.show();
 
     this.matchActive = true;
+
+    this.startSoundscape();
+    // Bot voices: clear per-bot rate-limit state and make sure the clips are
+    // loaded (no-op if a user gesture already preloaded them in main.ts).
+    const voice = getBotVoice();
+    voice.reset();
+    void voice.preload(import.meta.env.BASE_URL ?? '/');
 
     cancelAnimationFrame(this.animFrameId);
     this.lastTime = performance.now();
@@ -438,6 +482,9 @@ export class Game {
     if (isMoving) {
       // Phase advances proportional to actual ground speed
       this.walkPhase += dt * (isSprinting ? 12.0 : 8.0);
+      // Footstep SFX — the SFX layer rate-limits to one step per stride, so
+      // calling every frame while grounded + moving is safe (no spam).
+      if (this.player.isGrounded) this.footsteps.playPlayerFootstep('concrete');
     }
     // Snap previous position to detect first frame (avoid bob snap on respawn)
     void prevX; void prevZ;
@@ -447,14 +494,22 @@ export class Game {
     const fpv = GAME_CONFIG.fpv;
     const eyeH = fpv.eyeHeight * (isCrouching ? fpv.crouchEyeHeightMul : 1.0);
     const bob = isMoving
-      ? this.playerBody.tick({ dt, isMoving, isCrouching, isSprinting, walkPhase: this.walkPhase })
-      : this.playerBody.tick({ dt, isMoving: false, isCrouching, isSprinting, walkPhase: this.walkPhase });
+      ? this.playerBody.tick({ dt, isMoving, isCrouching, isSprinting, walkPhase: this.walkPhase, cameraPitch: this.cameraPitch, cameraYaw: this.cameraYaw })
+      : this.playerBody.tick({ dt, isMoving: false, isCrouching, isSprinting, walkPhase: this.walkPhase, cameraPitch: this.cameraPitch, cameraYaw: this.cameraYaw });
     cam.position.set(
       this.player.position.x + bob.bobX,
       this.player.position.y + eyeH + bob.bobY,
       this.player.position.z,
     );
-    const euler = new THREE.Euler(this.cameraPitch, this.cameraYaw, 0, 'YXZ');
+    // Spring-damped recoil kick is layered on top of the player's aim as a
+    // transient offset (it does not accumulate into cameraPitch/cameraYaw).
+    const recoil = this.playerBody.getCameraRecoil();
+    const euler = new THREE.Euler(
+      this.cameraPitch + recoil.pitch,
+      this.cameraYaw + recoil.yaw,
+      0,
+      'YXZ',
+    );
     cam.quaternion.setFromEuler(euler);
 
     if (snap.shoot) {
@@ -470,10 +525,15 @@ export class Game {
       } else {
         const fr = this.weapons.tryFire(this.player, now / 1000);
         if (fr) {
-          this.weaponRenderer.showMuzzleFlash();
-          // Per-weapon recoil feel from config
+          this.weaponRenderer.triggerMuzzleFlash(fr.weapon.type);
+          this.weaponRenderer.ejectShell(cam.position, cam.quaternion);
+          // Per-weapon gunfire SFX (T14): distinct sound per weapon, randomized
+          // variant to avoid repetition fatigue.
+          getWeaponSFX().playGunshot(fr.weapon.type);
+          // Per-weapon recoil: profile (camera/viewmodel spring) selected by
+          // weapon type; magnitude/sway still come from the feel config.
           const feel = GAME_CONFIG.weaponFeel[fr.weapon.type];
-          this.playerBody.addRecoil(feel.kick, feel.sway);
+          this.playerBody.addRecoil(fr.weapon.type, feel.kick, feel.sway);
           this.crosshair.setRecoilKick(feel.kick);
           this.doShoot(fr.damage, fr.spread, fr.range, fr.pellets);
         }
@@ -584,10 +644,28 @@ export class Game {
     // playerEyePos
     const playerEye = camPos.clone();
 
+    // Keep the 3D-audio listener glued to the player so bot voices come from
+    // the bot's real direction relative to where the player is looking.
+    const voice = getBotVoice();
+    voice.updateListener(
+      { x: camPos.x, y: camPos.y, z: camPos.z },
+      { x: camForward.x, y: camForward.y, z: camForward.z },
+    );
+
     const updated: BotData[] = [];
     for (const bot of this.bots) {
       const res = tickBot(bot, world, dt);
       let next = res.bot;
+
+      // ── Voice callouts on state transitions ──
+      // Spotted: the bot just locked onto the player (engage begins).
+      if (bot.state !== 'engage' && next.state === 'engage') {
+        voice.playBotVoice(next.id, 'spotted', this.botVoicePos(next));
+      }
+      // Reload: the bot just started reloading.
+      if (!bot.isReloading && next.isReloading) {
+        voice.playBotVoice(next.id, 'reload', this.botVoicePos(next));
+      }
       if (res.fired && next.isAlive) {
         // Bot shot — spawn a tracer and check for player hit
         const origin = new THREE.Vector3(next.position.x, 1.5, next.position.z);
@@ -625,6 +703,10 @@ export class Game {
           } else {
             // Player died — award the bot a kill
             next = { ...next, kills: next.kills + 1 };
+            // Confident kill bark, but only sometimes so it doesn't grate.
+            if (Math.random() < 0.3) {
+              voice.playBotVoice(next.id, 'kill', this.botVoicePos(next));
+            }
             this.bus.emit('botKilled', {
               id: 'player', name: 'You', killerId: next.id,
               weaponType: next.weapon, position: { x: this.player.position.x, z: this.player.position.z },
@@ -649,19 +731,22 @@ export class Game {
         this.botRenderer.createMesh(next);
         this.bus.emit('botRespawned', { id: next.id, name: next.name, position: { x: chosen.x, z: chosen.z } });
       }
-      // Track pending deaths (the bot just lost all health)
-      if (bot.isAlive && !next.isAlive) {
-        this.botRenderer.startDeathAnimation(next.id);
-        this.bus.emit('botKilled', {
-          id: next.id, name: next.name, killerId: 'player',
-          weaponType: this.player.currentWeapon,
-          position: { x: next.position.x, z: next.position.z },
-        });
-        // Award the player a kill on the scoreboard
-        const kr = addKill(this.score, 100, performance.now() / 1000);
-        this.score = kr.state;
-        this.hud.updateScore(this.score.score);
+      // Footstep SFX for living, moving bots — 3D-panned so direction is
+      // audible. The SFX layer rate-limits per bot id. Skip the frame a bot
+      // respawns/teleports (only count steps while it was alive before & after).
+      if (next.isAlive && bot.isAlive) {
+        const dx = next.position.x - bot.position.x;
+        const dz = next.position.z - bot.position.z;
+        const botSpeed = Math.hypot(dx, dz) / Math.max(dt, 1e-3);
+        if (botSpeed > 0.5) {
+          this.footsteps.playBotFootstep(next.id, [next.position.x, next.position.y, next.position.z]);
+        }
       }
+      // Kill bookkeeping (death animation, botKilled, scoreboard) now happens
+      // synchronously in doShoot() the instant a bot's HP hits 0 — see the note
+      // there and BUG_T20_DIAGNOSIS.md. A bot can only die from a player shot,
+      // and doShoot() is the only place that flips isAlive=false, so there is no
+      // longer any post-tick death transition to detect here.
       updated.push(next);
     }
     this.bots = updated;
@@ -697,12 +782,17 @@ export class Game {
         this.weaponRenderer.createTrail(origin, hit.point, true);
         this.weaponRenderer.createImpact(hit.point, hit.face?.normal);
         let hitFlesh = false;
+        let headshot = false;
+        // Head region sits ~0.7m+ above a humanoid's foot position (head group
+        // is at local y≈0.85 in both renderers). Used for the louder ding.
+        const HEAD_HEIGHT = 0.7;
         let obj: THREE.Object3D | null = hit.object;
         while (obj) {
           if (obj.userData.type === 'enemy') {
             hitFlesh = true;
             const eid = obj.userData.enemyId as string;
             const enemy = this.enemies.find(e => e.id === eid);
+            if (enemy) headshot = hit.point.y - enemy.position.y >= HEAD_HEIGHT;
             if (enemy && isEnemyAlive(enemy)) {
               const wp = this.weapons.getCurrentWeapon(this.player)!;
               const res = this.combat.processHit(wp, enemy, this.player);
@@ -715,6 +805,7 @@ export class Game {
             hitFlesh = true;
             const bid = obj.userData.botId as string;
             const bot = this.bots.find(b => b.id === bid);
+            if (bot) headshot = hit.point.y - bot.position.y >= HEAD_HEIGHT;
             if (bot && bot.isAlive) {
               const wp = this.weapons.getCurrentWeapon(this.player)!;
               const dmg = GAME_CONFIG.weapons[wp.type].damage;
@@ -728,6 +819,24 @@ export class Game {
                   respawnTimer: GAME_CONFIG.bots.respawnDelay,
                   deaths: bot.deaths + 1,
                 };
+                // Death grunt at the bot's position (isAlive just flipped false).
+                getBotVoice().playBotVoice(bot.id, 'death', this.botVoicePos(this.bots[idx]));
+                // Register the kill HERE, at the point the bot actually dies.
+                // Previously this lived in tickBots() behind a
+                // `bot.isAlive && !next.isAlive` diff, but doShoot() flips
+                // isAlive=false synchronously in the same frame, so that guard
+                // was never true and the kill was silently dropped — the match
+                // could never reach scoreLimit (BUG T20). See BUG_T20_DIAGNOSIS.md.
+                const dead = this.bots[idx];
+                this.botRenderer.startDeathAnimation(dead.id);
+                this.bus.emit('botKilled', {
+                  id: dead.id, name: dead.name, killerId: 'player',
+                  weaponType: this.player.currentWeapon,
+                  position: { x: dead.position.x, z: dead.position.z },
+                });
+                const kr = addKill(this.score, 100, performance.now() / 1000);
+                this.score = kr.state;
+                this.hud.updateScore(this.score.score);
               }
               this.bus.emit('botDamaged', {
                 id: bot.id, amount: dmg,
@@ -743,6 +852,16 @@ export class Game {
         if (hitFlesh) {
           this.weaponRenderer.createBlood(hit.point, hit.face?.normal);
           this.crosshair.showHitMarker();
+          // Hit-marker "ding" (T14): louder on headshots than body shots.
+          getWeaponSFX().playHitMarker(headshot ? 'headshot' : 'body');
+        } else {
+          // Surface hit (T16): bullet-impact thwack, 3D-positioned and
+          // surface-aware. Rate-limited per surface in the SFX layer so a
+          // multi-pellet shot hitting one wall doesn't stack thwacks.
+          this.damageSfx.playImpact(
+            [hit.point.x, hit.point.y, hit.point.z],
+            surfaceFromObject(hit.object),
+          );
         }
         // Broadcast the gunshot for the bot AI to hear
         this.lastGunshotAt = { x: hit.point.x, z: hit.point.z, t: performance.now() };
@@ -756,50 +875,17 @@ export class Game {
   }
 
   /**
-   * Play a synthesized "empty click" via the Web Audio API.
-   * No audio file required — pure oscillator + noise burst.
+   * Play the "empty click" SFX through the shared AudioManager.
+   * Routed through the 'tick' placeholder sound (loaded on first gesture in
+   * main.ts). No-ops gracefully if audio isn't ready yet.
    */
   private playEmptyClickSfx(): void {
-    try {
-      const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (!Ctx) return;
-      const ctx: AudioContext = this.audioCtx || new Ctx();
-      this.audioCtx = ctx;
-      if (ctx.state === 'suspended') ctx.resume();
+    getAudioManager().play('tick', { category: 'sfx', volume: 0.8 });
+  }
 
-      const now = ctx.currentTime;
-      // Click 1: very short noise burst
-      const bufferSize = Math.floor(0.05 * ctx.sampleRate);
-      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.1));
-      }
-      const noise = ctx.createBufferSource();
-      noise.buffer = buffer;
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0.25, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'highpass';
-      filter.frequency.value = 2000;
-      noise.connect(filter).connect(gain).connect(ctx.destination);
-      noise.start(now);
-      noise.stop(now + 0.06);
-
-      // Click 2: brief tone for the "click" of the trigger
-      const osc = ctx.createOscillator();
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(900, now);
-      const g2 = ctx.createGain();
-      g2.gain.setValueAtTime(0.08, now);
-      g2.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
-      osc.connect(g2).connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.05);
-    } catch {
-      // Audio not available; fail silently.
-    }
+  /** Bot world position at roughly head height, for 3D-positional voice. */
+  private botVoicePos(bot: BotData): { x: number; y: number; z: number } {
+    return { x: bot.position.x, y: bot.position.y + 1.4, z: bot.position.z };
   }
 
   /** Show the match-over screen (uses the existing GameOverScreen). */
@@ -864,6 +950,10 @@ export class Game {
       });
   }
 
+  get assetLoader(): AssetLoader {
+    return this._assetLoader;
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.animFrameId);
     this.input.detach(); this.bus.clear();
@@ -877,4 +967,17 @@ export class Game {
     this.matchHUD.dispose();
     this.joystick.dispose(); this.lookController.dispose(); this.actionButtons.dispose();
   }
+}
+
+/**
+ * Classify a hit surface for impact SFX (T16). Metallic meshes (e.g. barrels,
+ * metalness >= 0.25) read as 'metal'; everything else (floor, walls, crates,
+ * pillars) reads as 'concrete'. Wood/dirt variants are intentionally out of
+ * scope for T16, so they fold into 'concrete'.
+ */
+function surfaceFromObject(obj: THREE.Object3D): ImpactSurface {
+  const mat = (obj as unknown as { material?: unknown }).material;
+  const first = Array.isArray(mat) ? mat[0] : mat;
+  const metalness = (first as { metalness?: number } | undefined)?.metalness;
+  return typeof metalness === 'number' && metalness >= 0.25 ? 'metal' : 'concrete';
 }

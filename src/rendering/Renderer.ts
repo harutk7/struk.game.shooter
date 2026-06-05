@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { GAME_CONFIG } from '../core/GameConfig';
+import { applyEnvironment } from './EnvironmentMap';
 
 export class Renderer {
   public readonly threeRenderer: THREE.WebGLRenderer;
@@ -15,11 +16,7 @@ export class Renderer {
     this.container = container;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(
-      GAME_CONFIG.rendering.fogColor,
-      GAME_CONFIG.rendering.fogNear,
-      GAME_CONFIG.rendering.fogFar,
-    );
+    this.scene.fog = new THREE.FogExp2(0xc8d0d8, 0.012);
 
     this.camera = new THREE.PerspectiveCamera(
       GAME_CONFIG.camera.fov,
@@ -45,6 +42,11 @@ export class Renderer {
     this.threeRenderer.toneMappingExposure = 1.0;
 
     container.appendChild(this.threeRenderer.domElement);
+
+    // Install the HDRI environment map (T8) so metallic surfaces — weapon
+    // slides/barrels — reflect the sky. Best-effort: failure leaves the scene
+    // unchanged. Fire-and-forget; the first frames simply render without it.
+    void applyEnvironment(this.scene, this.threeRenderer);
 
     window.addEventListener('resize', this.onResize);
   }
