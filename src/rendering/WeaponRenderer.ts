@@ -72,6 +72,19 @@ interface BloodData {
   lifetime: number;
 }
 
+/**
+ * A flying brass shell casing. The mesh is a tiny brass cylinder; `velocity`
+ * (world-space, m/s) is integrated under gravity + drag each frame and `angular`
+ * (rad/s per axis) gives it a tumble. `createdAt` (performance.now ms) drives the
+ * lifetime so the shell is recycled to the pool ~1.5s after ejection.
+ */
+interface ShellData {
+  mesh: THREE.Mesh;
+  velocity: { x: number; y: number; z: number };
+  angular: { x: number; y: number; z: number };
+  createdAt: number;
+}
+
 export class WeaponRenderer {
   private scene: THREE.Scene;
   private camera: THREE.Camera;
@@ -96,14 +109,30 @@ export class WeaponRenderer {
   private trailPool: ObjectPool<TrailData>;
   private impactPool: ObjectPool<ImpactData>;
   private bloodPool: ObjectPool<BloodData>;
+  private shellPool: ObjectPool<ShellData>;
 
   private activeTrails: TrailData[] = [];
   private activeImpacts: ImpactData[] = [];
   private activeBlood: BloodData[] = [];
+  private activeShells: ShellData[] = [];
 
   // Cached for the blood animation delta-time
   private lastTickDt = 0;
   private _lastTickTime: number | null = null;
+  // Independent delta-time clock for shell physics.
+  private _lastShellTime: number | null = null;
+
+  // Shell-ejection physics tuning.
+  private static readonly SHELL_GRAVITY = 9.81; // m/s^2
+  private static readonly SHELL_DRAG = 0.1; // fractional velocity bleed per second
+  private static readonly SHELL_BOUNCE_DAMPEN = 0.4; // y-velocity kept after a bounce
+  private static readonly SHELL_LIFETIME_MS = 1500; // removed ~1.5s after ejection
+
+  /**
+   * Optional hook fired when a shell hits the floor and bounces. T15 (audio)
+   * wires a brief brass "ping" here; left null until then.
+   */
+  onShellBounce: (() => void) | null = null;
 
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     this.scene = scene;
@@ -154,6 +183,13 @@ export class WeaponRenderer {
       () => this.createBloodData(),
       (b) => this.resetBlood(b),
       12,
+    );
+
+    // Shell-casing pool — 20 brass shells reused across the match.
+    this.shellPool = new ObjectPool<ShellData>(
+      () => this.createShellData(),
+      (s) => this.resetShell(s),
+      20,
     );
   }
 
@@ -352,6 +388,120 @@ export class WeaponRenderer {
     }
   }
 
+  /** Create one pooled brass shell casing (a tiny metallic cylinder). */
+  private createShellData(): ShellData {
+    // ~1cm tall, ~1cm diameter cylinder.
+    const geo = new THREE.CylinderGeometry(0.005, 0.005, 0.012, 8);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xb87333,
+      metalness: 0.9,
+      roughness: 0.4,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    mesh.castShadow = true;
+    // Shells must never block weapon raycasts.
+    (mesh as any).raycast = () => {};
+    this.scene.add(mesh);
+    return {
+      mesh,
+      velocity: { x: 0, y: 0, z: 0 },
+      angular: { x: 0, y: 0, z: 0 },
+      createdAt: 0,
+    };
+  }
+
+  private resetShell(s: ShellData): void {
+    s.mesh.visible = false;
+    s.velocity.x = 0;
+    s.velocity.y = 0;
+    s.velocity.z = 0;
+    s.angular.x = 0;
+    s.angular.y = 0;
+    s.angular.z = 0;
+  }
+
+  /**
+   * Eject a brass shell from the weapon's ejection port. `weaponPosition` and
+   * `weaponRotation` describe the weapon in world space; the port offset and the
+   * initial velocity (rightward + upward + backward) are expressed in weapon-local
+   * space and rotated into the world by `weaponRotation`. The shell then arcs
+   * under gravity, tumbles, and bounces once on the floor (see tickShells).
+   */
+  ejectShell(weaponPosition: THREE.Vector3, weaponRotation: THREE.Quaternion): void {
+    const s = this.shellPool.acquire();
+
+    // Ejection port: right side, just below the sightline, slightly forward.
+    const port = new THREE.Vector3(0.18, -0.04, -0.12)
+      .applyQuaternion(weaponRotation)
+      .add(weaponPosition);
+    s.mesh.position.copy(port);
+
+    // Initial velocity in weapon-local space, then rotated to world.
+    const localVel = new THREE.Vector3(
+      2.2 + (Math.random() - 0.5) * 1.0, // rightward
+      1.8 + (Math.random() - 0.5) * 0.8, // upward
+      1.2 + (Math.random() - 0.5) * 0.8, // backward (+z = behind the camera)
+    ).applyQuaternion(weaponRotation);
+    s.velocity.x = localVel.x;
+    s.velocity.y = localVel.y;
+    s.velocity.z = localVel.z;
+
+    // Tumble: random spin on every axis.
+    s.angular.x = (Math.random() - 0.5) * 30;
+    s.angular.y = (Math.random() - 0.5) * 30;
+    s.angular.z = (Math.random() - 0.5) * 30;
+
+    s.mesh.rotation.set(Math.random() * 6.28, Math.random() * 6.28, Math.random() * 6.28);
+    s.mesh.visible = true;
+    s.createdAt = performance.now();
+    this.activeShells.push(s);
+  }
+
+  /** Integrate shell physics: gravity, drag, floor bounce, tumble, recycle. */
+  private tickShells(now: number): void {
+    if (this.activeShells.length === 0) {
+      this._lastShellTime = now;
+      return;
+    }
+    const dt = Math.min((now - (this._lastShellTime ?? now)) / 1000, 0.05);
+    this._lastShellTime = now;
+
+    const drag = 1 - WeaponRenderer.SHELL_DRAG * dt;
+    for (let i = this.activeShells.length - 1; i >= 0; i--) {
+      const s = this.activeShells[i];
+      if (now - s.createdAt >= WeaponRenderer.SHELL_LIFETIME_MS) {
+        this.activeShells.splice(i, 1);
+        this.shellPool.release(s);
+        continue;
+      }
+
+      // Gravity + slight air drag.
+      s.velocity.y -= WeaponRenderer.SHELL_GRAVITY * dt;
+      s.velocity.x *= drag;
+      s.velocity.y *= drag;
+      s.velocity.z *= drag;
+
+      // Integrate position.
+      s.mesh.position.x += s.velocity.x * dt;
+      s.mesh.position.y += s.velocity.y * dt;
+      s.mesh.position.z += s.velocity.z * dt;
+
+      // Floor collision: bounce once (flip + dampen y, add ground friction).
+      if (s.mesh.position.y <= 0 && s.velocity.y < 0) {
+        s.velocity.y = -s.velocity.y * WeaponRenderer.SHELL_BOUNCE_DAMPEN;
+        s.velocity.x *= 0.6;
+        s.velocity.z *= 0.6;
+        if (this.onShellBounce) this.onShellBounce();
+      }
+
+      // Tumble.
+      s.mesh.rotation.x += s.angular.x * dt;
+      s.mesh.rotation.y += s.angular.y * dt;
+      s.mesh.rotation.z += s.angular.z * dt;
+    }
+  }
+
   /** Spawn a blood splatter at `point`, flung outward by `normal`. */
   createBlood(point: THREE.Vector3, normal?: THREE.Vector3): void {
     const b = this.bloodPool.acquire();
@@ -488,6 +638,9 @@ export class WeaponRenderer {
     // Muzzle flash bloom + light pulse
     this.tickMuzzleFlash(now);
 
+    // Brass shells: gravity, bounce, tumble
+    this.tickShells(now);
+
     // Fade trails
     for (let i = this.activeTrails.length - 1; i >= 0; i--) {
       const t = this.activeTrails[i];
@@ -575,8 +728,16 @@ export class WeaponRenderer {
         (s.material as THREE.SpriteMaterial).dispose();
       }
     }
+    for (const s of this.activeShells) {
+      this.scene.remove(s.mesh);
+      s.mesh.geometry.dispose();
+      (s.mesh.material as THREE.Material).dispose();
+    }
+    this.activeShells = [];
+
     this.trailPool.clear();
     this.impactPool.clear();
     this.bloodPool.clear();
+    this.shellPool.clear();
   }
 }
