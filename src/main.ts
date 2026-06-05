@@ -3,6 +3,7 @@ import { assetManifest } from './assets/assetManifest';
 import { getAudioManager } from './audio/AudioManager';
 import { getWeaponSFX } from './audio/WeaponSFX';
 import { getFootstepSFX } from './audio/FootstepSFX';
+import { getDamageSFX } from './audio/DamageSFX';
 
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('game-container');
@@ -37,6 +38,8 @@ document.addEventListener('DOMContentLoaded', () => {
     void getWeaponSFX().loadAll(base);
     // Preload footstep + ambient SFX (T15) so they're ready by match start.
     void getFootstepSFX().loadAll(base).catch(() => {});
+    // Preload damage SFX (T16): player pain, bot death, bullet impact.
+    void getDamageSFX().loadAll(base).catch(() => {});
   };
   window.addEventListener('pointerdown', initAudio);
   window.addEventListener('keydown', initAudio);

@@ -48,6 +48,8 @@ import { getWeaponConfig } from '../models/Weapon';
 import { getAudioManager } from '../audio/AudioManager';
 import { getWeaponSFX } from '../audio/WeaponSFX';
 import { getFootstepSFX } from '../audio/FootstepSFX';
+import { getDamageSFX } from '../audio/DamageSFX';
+import type { ImpactSurface } from '../audio/DamageSFX';
 
 export class Game {
   private _assetLoader = new AssetLoader();
@@ -97,6 +99,9 @@ export class Game {
   private lastEmptyClickAt = -10;
   // Footstep + ambient soundscape (T15). Rate-limiting lives inside the SFX layer.
   private footsteps = getFootstepSFX();
+  // Damage SFX (T16): player pain, bot death scream, bullet impact. Rate-limited
+  // inside the SFX layer.
+  private damageSfx = getDamageSFX();
   // Track wave transitions so events are emitted exactly once
   private prevWavePhase: WavePhase = 'spawning';
   private prevWaveNumber = 1;
@@ -179,6 +184,8 @@ export class Game {
       this.effects.flashDamage();
       this.effects.triggerShake(0.05, 0.15);
       this.crosshair.flashHit();
+      // Pain grunt (T16) — volume scales with the hit, rate-limited to one per 0.5s.
+      this.damageSfx.playPlayerPain(d.amount);
     });
     this.bus.on('playerHealed', (d) => this.hud.updateHealth(d.currentHealth, this.player.maxHealth));
     this.bus.on('playerDied', () => this.handleGameOver());
@@ -219,6 +226,16 @@ export class Game {
 
     // ── Deathmatch event wiring (T4) ──
     this.bus.on('botKilled', (d) => {
+      // Death scream SFX (T16) — the guttural die sound from the victim's
+      // position (distinct from T19's "got the kill" callout). Only for actual
+      // bots; the player's own death is handled by the pain/HUD paths.
+      if (d.id !== 'player') {
+        const bot = this.bots.find((b) => b.id === d.id);
+        const deathPos: [number, number, number] = bot
+          ? [bot.position.x, bot.position.y, bot.position.z]
+          : [d.position.x, 1, d.position.z];
+        this.damageSfx.playBotDeath(d.id, deathPos);
+      }
       if (!this.match) return;
       // d.killerId may be 'player' (player killed this bot) or a bot id
       const killerIsPlayer = d.killerId === 'player';
@@ -239,6 +256,7 @@ export class Game {
     const base = import.meta.env.BASE_URL ?? '/';
     void this.footsteps.loadAll(base);
     void this.footsteps.startAmbient();
+    void this.damageSfx.loadAll(base);
   }
 
   private startGame(): void {
@@ -797,6 +815,14 @@ export class Game {
           this.crosshair.showHitMarker();
           // Hit-marker "ding" (T14): louder on headshots than body shots.
           getWeaponSFX().playHitMarker(headshot ? 'headshot' : 'body');
+        } else {
+          // Surface hit (T16): bullet-impact thwack, 3D-positioned and
+          // surface-aware. Rate-limited per surface in the SFX layer so a
+          // multi-pellet shot hitting one wall doesn't stack thwacks.
+          this.damageSfx.playImpact(
+            [hit.point.x, hit.point.y, hit.point.z],
+            surfaceFromObject(hit.object),
+          );
         }
         // Broadcast the gunshot for the bot AI to hear
         this.lastGunshotAt = { x: hit.point.x, z: hit.point.z, t: performance.now() };
@@ -897,4 +923,17 @@ export class Game {
     this.matchHUD.dispose();
     this.joystick.dispose(); this.lookController.dispose(); this.actionButtons.dispose();
   }
+}
+
+/**
+ * Classify a hit surface for impact SFX (T16). Metallic meshes (e.g. barrels,
+ * metalness >= 0.25) read as 'metal'; everything else (floor, walls, crates,
+ * pillars) reads as 'concrete'. Wood/dirt variants are intentionally out of
+ * scope for T16, so they fold into 'concrete'.
+ */
+function surfaceFromObject(obj: THREE.Object3D): ImpactSurface {
+  const mat = (obj as unknown as { material?: unknown }).material;
+  const first = Array.isArray(mat) ? mat[0] : mat;
+  const metalness = (first as { metalness?: number } | undefined)?.metalness;
+  return typeof metalness === 'number' && metalness >= 0.25 ? 'metal' : 'concrete';
 }

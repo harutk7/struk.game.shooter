@@ -72,7 +72,17 @@ number of files under `public/assets/` and `public/sounds/`.
 - **Dirt footstep 4** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/footsteps/dirt_4.wav · Used in: T15 (footsteps)
 - **Ambient hum bed** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/ambient/ambient_hum.wav · Used in: T15 (ambient soundscape)
 - **Ambient wind bed** — Source: Procedurally generated (scripts/gen_footstep_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/ambient/ambient_wind.wav · Used in: T15 (ambient soundscape)
+- **Bot death 1** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/hit/death_1.wav · Used in: T16 (bot death SFX)
+- **Bot death 2** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/hit/death_2.wav · Used in: T16 (bot death SFX)
+- **Bot death 3** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/hit/death_3.wav · Used in: T16 (bot death SFX)
+- **Impact concrete 1** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/impact/impact_concrete_1.wav · Used in: T16 (bullet impact SFX)
+- **Impact concrete 2** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/impact/impact_concrete_2.wav · Used in: T16 (bullet impact SFX)
+- **Impact metal 1** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/impact/impact_metal_1.wav · Used in: T16 (bullet impact SFX)
+- **Impact metal 2** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/impact/impact_metal_2.wav · Used in: T16 (bullet impact SFX)
+- **Player pain 1** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/player/pain_1.wav · Used in: T16 (player pain SFX)
+- **Player pain 2** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/player/pain_2.wav · Used in: T16 (player pain SFX)
+- **Player pain 3** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/player/pain_3.wav · Used in: T16 (player pain SFX)
 
 ---
 
-_Last audited: 2026-06-05 (T12; audio entries added during realism-v2 integration). Asset count: 28 — all CC0 1.0 Universal._
+_Last audited: 2026-06-05 (T12; audio entries added during realism-v2 integration). Asset count: 38 — all CC0 1.0 Universal._
