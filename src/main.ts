@@ -4,6 +4,7 @@ import { getAudioManager } from './audio/AudioManager';
 import { getWeaponSFX } from './audio/WeaponSFX';
 import { getFootstepSFX } from './audio/FootstepSFX';
 import { getDamageSFX } from './audio/DamageSFX';
+import { getBotVoice } from './audio/BotVoice';
 
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('game-container');
@@ -40,6 +41,8 @@ document.addEventListener('DOMContentLoaded', () => {
     void getFootstepSFX().loadAll(base).catch(() => {});
     // Preload damage SFX (T16): player pain, bot death, bullet impact.
     void getDamageSFX().loadAll(base).catch(() => {});
+    // Preload bot voice callout clips (T19).
+    void getBotVoice().preload(base);
   };
   window.addEventListener('pointerdown', initAudio);
   window.addEventListener('keydown', initAudio);

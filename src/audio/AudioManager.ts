@@ -147,6 +147,25 @@ export class AudioManager {
   }
 
   /**
+   * The decoded buffer for `name`, or null if not loaded. Exposed so callers
+   * that build their own node graph (e.g. positional voices via {@link
+   * BotVoice}, which need a PannerNode the plain `play()` path can't insert)
+   * can reuse the shared, cached buffer instead of decoding their own copy.
+   */
+  getBuffer(name: string): AudioBuffer | null {
+    return this.buffers.get(name) ?? null;
+  }
+
+  /**
+   * The `sfx` category gain node — the routing point positional voices connect
+   * their PannerNode into so they obey the sfx + master volume controls. Null
+   * until {@link init} has run.
+   */
+  get sfxInput(): AudioNode | null {
+    return this.sfxGain;
+  }
+
+  /**
    * Play a previously-loaded sound. No-ops gracefully (returns null) if the
    * buffer isn't loaded or the context isn't initialized, so callers in the
    * game loop never need a try/catch.

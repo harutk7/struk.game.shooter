@@ -50,6 +50,7 @@ import { getWeaponSFX } from '../audio/WeaponSFX';
 import { getFootstepSFX } from '../audio/FootstepSFX';
 import { getDamageSFX } from '../audio/DamageSFX';
 import type { ImpactSurface } from '../audio/DamageSFX';
+import { getBotVoice } from '../audio/BotVoice';
 
 export class Game {
   private _assetLoader = new AssetLoader();
@@ -349,6 +350,12 @@ export class Game {
     this.matchActive = true;
 
     this.startSoundscape();
+    // Bot voices: clear per-bot rate-limit state and make sure the clips are
+    // loaded (no-op if a user gesture already preloaded them in main.ts).
+    const voice = getBotVoice();
+    voice.reset();
+    void voice.preload(import.meta.env.BASE_URL ?? '/');
+
     cancelAnimationFrame(this.animFrameId);
     this.lastTime = performance.now();
     this.loop();
@@ -637,10 +644,28 @@ export class Game {
     // playerEyePos
     const playerEye = camPos.clone();
 
+    // Keep the 3D-audio listener glued to the player so bot voices come from
+    // the bot's real direction relative to where the player is looking.
+    const voice = getBotVoice();
+    voice.updateListener(
+      { x: camPos.x, y: camPos.y, z: camPos.z },
+      { x: camForward.x, y: camForward.y, z: camForward.z },
+    );
+
     const updated: BotData[] = [];
     for (const bot of this.bots) {
       const res = tickBot(bot, world, dt);
       let next = res.bot;
+
+      // ── Voice callouts on state transitions ──
+      // Spotted: the bot just locked onto the player (engage begins).
+      if (bot.state !== 'engage' && next.state === 'engage') {
+        voice.playBotVoice(next.id, 'spotted', this.botVoicePos(next));
+      }
+      // Reload: the bot just started reloading.
+      if (!bot.isReloading && next.isReloading) {
+        voice.playBotVoice(next.id, 'reload', this.botVoicePos(next));
+      }
       if (res.fired && next.isAlive) {
         // Bot shot — spawn a tracer and check for player hit
         const origin = new THREE.Vector3(next.position.x, 1.5, next.position.z);
@@ -678,6 +703,10 @@ export class Game {
           } else {
             // Player died — award the bot a kill
             next = { ...next, kills: next.kills + 1 };
+            // Confident kill bark, but only sometimes so it doesn't grate.
+            if (Math.random() < 0.3) {
+              voice.playBotVoice(next.id, 'kill', this.botVoicePos(next));
+            }
             this.bus.emit('botKilled', {
               id: 'player', name: 'You', killerId: next.id,
               weaponType: next.weapon, position: { x: this.player.position.x, z: this.player.position.z },
@@ -798,6 +827,8 @@ export class Game {
                   respawnTimer: GAME_CONFIG.bots.respawnDelay,
                   deaths: bot.deaths + 1,
                 };
+                // Death grunt at the bot's position (isAlive just flipped false).
+                getBotVoice().playBotVoice(bot.id, 'death', this.botVoicePos(this.bots[idx]));
               }
               this.bus.emit('botDamaged', {
                 id: bot.id, amount: dmg,
@@ -842,6 +873,11 @@ export class Game {
    */
   private playEmptyClickSfx(): void {
     getAudioManager().play('tick', { category: 'sfx', volume: 0.8 });
+  }
+
+  /** Bot world position at roughly head height, for 3D-positional voice. */
+  private botVoicePos(bot: BotData): { x: number; y: number; z: number } {
+    return { x: bot.position.x, y: bot.position.y + 1.4, z: bot.position.z };
   }
 
   /** Show the match-over screen (uses the existing GameOverScreen). */

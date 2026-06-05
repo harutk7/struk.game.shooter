@@ -82,7 +82,17 @@ number of files under `public/assets/` and `public/sounds/`.
 - **Player pain 1** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/player/pain_1.wav · Used in: T16 (player pain SFX)
 - **Player pain 2** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/player/pain_2.wav · Used in: T16 (player pain SFX)
 - **Player pain 3** — Source: Procedurally generated (scripts/gen_damage_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/player/pain_3.wav · Used in: T16 (player pain SFX)
+- **Bot voice — death 1** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/death_1.wav · Used in: T19 (bot voice callouts)
+- **Bot voice — death 2** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/death_2.wav · Used in: T19 (bot voice callouts)
+- **Bot voice — death 3** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/death_3.wav · Used in: T19 (bot voice callouts)
+- **Bot voice — kill 1** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/kill_1.wav · Used in: T19 (bot voice callouts)
+- **Bot voice — kill 2** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/kill_2.wav · Used in: T19 (bot voice callouts)
+- **Bot voice — reload 1** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/reload_1.wav · Used in: T19 (bot voice callouts)
+- **Bot voice — reload 2** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/reload_2.wav · Used in: T19 (bot voice callouts)
+- **Bot voice — spotted 1** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/spotted_1.wav · Used in: T19 (bot voice callouts)
+- **Bot voice — spotted 2** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/spotted_2.wav · Used in: T19 (bot voice callouts)
+- **Bot voice — spotted 3** — Source: Procedurally generated (scripts/gen_voice_sounds.mjs) · Author: struk.game.shooter · License: CC0 · Added: 2026-06-04 · Path: public/sounds/bot_voice/spotted_3.wav · Used in: T19 (bot voice callouts)
 
 ---
 
-_Last audited: 2026-06-05 (T12; audio entries added during realism-v2 integration). Asset count: 38 — all CC0 1.0 Universal._
+_Last audited: 2026-06-05 (T12; audio entries added during realism-v2 integration). Asset count: 48 — all CC0 1.0 Universal._
