@@ -1,23 +1,22 @@
 /**
- * Bot renderer — procedural humanoid bodies (head, torso, arms, legs)
- * with a visible weapon. All geometry is procedurally generated (no
- * asset files). The model is used for both:
- *   - live bots: walks toward waypoints, strafes while engaging
- *   - ragdoll   : on death, body tilts and sinks
+ * Bot renderer — composes a procedural humanoid `BotBody` (head, torso, arms,
+ * legs; see BotBodyRenderer.ts) under a position/yaw root, and layers on the
+ * non-body presentation: a held weapon, a billboard health bar, a name sprite
+ * and a hit-flash. All geometry is procedurally generated (no asset files).
+ *
+ * The body itself owns the walk / idle / death animation; this class only
+ * feeds it per-frame state (movement, cumulative distance) and drives the
+ * death-animation clock.
  */
 
 import * as THREE from 'three';
 import type { BotData } from '../models/Bot';
 import { buildWeaponModel, disposeWeaponModel } from './WeaponModels';
+import { BotBody } from './BotBodyRenderer';
 
 interface BotMesh {
   root: THREE.Group;
-  torso: THREE.Group;
-  head: THREE.Group;
-  leftArm: THREE.Group;
-  rightArm: THREE.Group;
-  leftLeg: THREE.Group;
-  rightLeg: THREE.Group;
+  body: BotBody;
   weapon: THREE.Group;
   bodyMat: THREE.MeshStandardMaterial;
   nameSprite?: THREE.Sprite;
@@ -25,8 +24,10 @@ interface BotMesh {
   hpFill: THREE.Mesh;
   hpGroup: THREE.Group;
   flashTimer: number;
-  deathAnimation?: { startTime: number; duration: number };
-  walkPhase: number;
+  /** Set once the bot dies; holds the last frame time so we can derive dt. */
+  death?: { lastNow: number };
+  /** Cumulative distance travelled (m) — drives the body's walk phase. */
+  distanceTraveled: number;
 }
 
 export class BotRenderer {
@@ -46,72 +47,18 @@ export class BotRenderer {
     root.userData.botId = bot.id;
     root.userData.type = 'bot';
 
-    // Body material (per-bot color)
-    const bodyMat = new THREE.MeshStandardMaterial({ color: bot.color, roughness: 0.8 });
-    const pantsMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.9 });
+    // Procedural humanoid body (per-bot team colour).
+    const body = new BotBody({ color: bot.color });
+    root.add(body.group);
 
-    // Torso
-    const torso = new THREE.Group();
-    const chest = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.55, 0.30), bodyMat);
-    chest.position.y = 0.15;
-    chest.castShadow = true;
-    torso.add(chest);
-    const stomach = new THREE.Mesh(new THREE.BoxGeometry(0.50, 0.30, 0.28), bodyMat);
-    stomach.position.y = -0.20;
-    stomach.castShadow = true;
-    torso.add(stomach);
-    torso.position.y = 0.5;
-    root.add(torso);
-
-    // Head
-    const head = new THREE.Group();
-    const headMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(0.22, 0.24, 0.22),
-      new THREE.MeshStandardMaterial({ color: 0xd9b48a, roughness: 0.7 }),
-    );
-    headMesh.castShadow = true;
-    head.add(headMesh);
-    const cap = new THREE.Mesh(
-      new THREE.BoxGeometry(0.26, 0.10, 0.26),
-      new THREE.MeshStandardMaterial({ color: bot.color, roughness: 0.6 }),
-    );
-    cap.position.y = 0.14;
-    head.add(cap);
-    // Eyes
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-    const leftEye = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 6), eyeMat);
-    leftEye.position.set(-0.07, 0.02, -0.115);
-    head.add(leftEye);
-    const rightEye = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 6), eyeMat);
-    rightEye.position.set(0.07, 0.02, -0.115);
-    head.add(rightEye);
-    head.position.y = 0.85;
-    root.add(head);
-
-    // Arms
-    const leftArm = this.buildLimb(bodyMat, 0.60);
-    leftArm.position.set(0.34, 0.6, 0);
-    root.add(leftArm);
-    const rightArm = this.buildLimb(bodyMat, 0.60);
-    rightArm.position.set(-0.34, 0.6, 0);
-    root.add(rightArm);
-
-    // Legs
-    const leftLeg = this.buildLimb(pantsMat, 0.85);
-    leftLeg.position.set(0.13, 0.0, 0);
-    root.add(leftLeg);
-    const rightLeg = this.buildLimb(pantsMat, 0.85);
-    rightLeg.position.set(-0.13, 0.0, 0);
-    root.add(rightLeg);
-
-    // Weapon in right hand
+    // Weapon in the right hand.
     const weapon = buildWeaponModel(bot.weapon);
-    weapon.scale.setScalar(0.85); // smaller than player FPV weapon
-    weapon.position.set(0, -0.32, 0.05);
+    weapon.scale.setScalar(0.85); // smaller than the player FPV weapon
+    weapon.position.set(0, -0.06, 0.12);
     weapon.rotation.set(0, Math.PI, 0);
-    rightArm.add(weapon);
+    body.rightHand.add(weapon);
 
-    // Health bar
+    // Health bar (billboarded toward the camera in sync()).
     const hpGroup = new THREE.Group();
     const hpBg = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 0.08),
@@ -128,7 +75,7 @@ export class BotRenderer {
     hpGroup.add(hpFill);
     this.scene.add(hpGroup);
 
-    // Name sprite (cheap: textured plane with bot name baked onto canvas)
+    // Name sprite (cheap: textured plane with bot name baked onto canvas).
     const sprite = this.createNameSprite(bot.name, bot.color);
     sprite.position.y = 1.3;
     root.add(sprite);
@@ -136,21 +83,10 @@ export class BotRenderer {
     this.scene.add(root);
 
     this.meshes.set(bot.id, {
-      root, torso, head, leftArm, rightArm, leftLeg, rightLeg, weapon,
-      bodyMat, nameSprite: sprite, hpBg, hpFill, hpGroup,
-      flashTimer: 0, walkPhase: Math.random() * Math.PI * 2,
+      root, body, weapon,
+      bodyMat: body.material, nameSprite: sprite, hpBg, hpFill, hpGroup,
+      flashTimer: 0, distanceTraveled: Math.random() * 4,
     });
-  }
-
-  /** Build a single limb (upper + lower segment). Returns a group at the top. */
-  private buildLimb(material: THREE.MeshStandardMaterial, totalLength: number): THREE.Group {
-    const g = new THREE.Group();
-    const half = totalLength / 2;
-    const seg = new THREE.Mesh(new THREE.BoxGeometry(0.12, totalLength, 0.12), material);
-    seg.position.y = -half;
-    seg.castShadow = true;
-    g.add(seg);
-    return g;
   }
 
   /** Create a small text sprite with the bot's name. */
@@ -180,7 +116,7 @@ export class BotRenderer {
   sync(bot: BotData, dt: number, cameraPos: THREE.Vector3): void {
     const m = this.meshes.get(bot.id);
     if (!m) return;
-    if (m.deathAnimation) return; // ragdoll handles itself
+    if (m.death) return; // ragdoll handles itself
 
     m.root.position.set(bot.position.x, 0, bot.position.z);
     m.root.rotation.y = -bot.yaw; // yaw is atan2(z,x); -yaw rotates model to face that direction
@@ -197,22 +133,12 @@ export class BotRenderer {
     else fillMat.color.setHex(0xff4444);
     m.hpGroup.visible = bot.isAlive;
 
-    // Walk animation
+    // Drive the body's walk/idle animation. Phase is distance-based, so we
+    // accumulate distance from speed only while actually moving.
     const speed = Math.hypot(bot.velocity.x, bot.velocity.z);
     const isMoving = speed > 0.5;
-    m.walkPhase += dt * (isMoving ? speed * 2.2 : 0.0);
-    const swing = isMoving ? Math.sin(m.walkPhase) * 0.7 : 0;
-    m.leftLeg.rotation.x = swing;
-    m.rightLeg.rotation.x = -swing;
-    m.leftArm.rotation.x = -swing * 0.5;
-    m.rightArm.rotation.x = swing * 0.4;
-
-    // Tilt forward when sprinting
-    if (speed > 4) {
-      m.torso.rotation.x = 0.15;
-    } else {
-      m.torso.rotation.x = 0;
-    }
+    if (isMoving) m.distanceTraveled += speed * dt;
+    m.body.tick({ dt, isMoving, distanceTraveled: m.distanceTraveled });
 
     // Hit flash decay
     if (m.flashTimer > 0) {
@@ -238,34 +164,27 @@ export class BotRenderer {
     m.flashTimer = 0.08;
   }
 
-  /** Start death ragdoll (tilt + sink). */
+  /** Start the death ragdoll (forward lean + buckle, then fade). */
   startDeathAnimation(botId: string): void {
     const m = this.meshes.get(botId);
     if (!m) return;
-    m.deathAnimation = { startTime: performance.now(), duration: 1500 };
+    if (m.death) return;
+    m.body.setAlive(false);
+    m.death = { lastNow: performance.now() };
+    m.hpGroup.visible = false;
   }
 
-  /** Tick death animations. Returns bot IDs that finished. */
+  /** Tick death animations. Returns bot IDs whose animation finished. */
   tickDeathAnimations(now: number): string[] {
     const done: string[] = [];
     for (const [id, m] of this.meshes) {
-      const anim = m.deathAnimation;
-      if (!anim) continue;
-      const t = (now - anim.startTime) / anim.duration;
-      if (t >= 1) {
-        done.push(id);
-        continue;
-      }
-      // Sink
-      m.root.position.y = -0.5 * t;
-      // Tilt
-      m.root.rotation.z = -1.2 * t;
-      m.root.rotation.x = 0.4 * t;
-      // Fade body
-      m.bodyMat.transparent = true;
-      m.bodyMat.opacity = 1 - t;
-      // Hide HP bar
+      if (!m.death) continue;
+      // Derive dt from frame timing, clamped so a long pause can't snap it.
+      const dt = Math.max(0, Math.min(0.1, (now - m.death.lastNow) / 1000));
+      m.death.lastNow = now;
+      m.body.tick({ dt, isMoving: false, distanceTraveled: m.distanceTraveled });
       m.hpGroup.visible = false;
+      if (m.body.isDeathComplete()) done.push(id);
     }
     return done;
   }
@@ -276,13 +195,7 @@ export class BotRenderer {
     if (!m) return;
     this.scene.remove(m.root);
     this.scene.remove(m.hpGroup);
-    m.root.traverse((o: THREE.Object3D) => {
-      const mesh = o as THREE.Mesh;
-      if ((mesh as any).geometry) (mesh as any).geometry.dispose();
-      const mat = (mesh.material as THREE.Material | THREE.Material[] | undefined);
-      if (Array.isArray(mat)) mat.forEach((mm) => mm.dispose());
-      else if (mat) mat.dispose();
-    });
+    m.body.dispose();
     disposeWeaponModel(m.weapon);
     if (m.nameSprite) {
       (m.nameSprite.material as THREE.SpriteMaterial).map?.dispose();
