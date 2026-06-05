@@ -6,6 +6,48 @@
 import * as THREE from 'three';
 import { ObjectPool } from './ObjectPool';
 
+/**
+ * Per-weapon muzzle-flash look. `core`/`mid`/`edge` are CSS rgba stops for the
+ * procedural radial-gradient texture (white-hot center → colored edge →
+ * transparent). `light` is the point-light tint, `intensity` its peak power,
+ * and `size` the world-space radius of the billboard at full bloom.
+ */
+interface FlashProfile {
+  core: string;
+  mid: string;
+  edge: string;
+  light: number;
+  intensity: number;
+  size: number;
+}
+
+/**
+ * Flash profiles keyed by weapon. Real game weapons are PISTOL/RIFLE/SHOTGUN/
+ * SNIPER (lower-cased here); the ak/mp5/m4 aliases keep the renderer usable with
+ * the common real-world weapon names too.
+ *   - pistol : cooler blue-white
+ *   - ak/rifle: orange-yellow
+ *   - mp5/m4/shotgun/sniper: yellow-white
+ */
+const FLASH_PROFILES: Record<string, FlashProfile> = {
+  pistol: { core: 'rgba(240,248,255,1)', mid: 'rgba(160,200,255,0.85)', edge: 'rgba(80,140,255,0.25)', light: 0xcfe0ff, intensity: 4, size: 0.32 },
+  ak: { core: 'rgba(255,250,210,1)', mid: 'rgba(255,175,40,0.9)', edge: 'rgba(255,80,0,0.3)', light: 0xffa022, intensity: 6, size: 0.5 },
+  rifle: { core: 'rgba(255,250,210,1)', mid: 'rgba(255,175,40,0.9)', edge: 'rgba(255,80,0,0.3)', light: 0xffa022, intensity: 6, size: 0.5 },
+  mp5: { core: 'rgba(255,255,235,1)', mid: 'rgba(255,225,120,0.9)', edge: 'rgba(255,150,20,0.3)', light: 0xffdd88, intensity: 5, size: 0.42 },
+  m4: { core: 'rgba(255,255,235,1)', mid: 'rgba(255,225,120,0.9)', edge: 'rgba(255,150,20,0.3)', light: 0xffdd88, intensity: 5, size: 0.42 },
+  shotgun: { core: 'rgba(255,255,235,1)', mid: 'rgba(255,225,120,0.9)', edge: 'rgba(255,150,20,0.3)', light: 0xffdd88, intensity: 7, size: 0.6 },
+  sniper: { core: 'rgba(255,255,235,1)', mid: 'rgba(255,225,120,0.9)', edge: 'rgba(255,150,20,0.3)', light: 0xffdd88, intensity: 6, size: 0.55 },
+  default: { core: 'rgba(255,255,230,1)', mid: 'rgba(255,210,90,0.9)', edge: 'rgba(255,140,20,0.3)', light: 0xffaa00, intensity: 5, size: 0.45 },
+};
+
+/** Parse a CSS `rgba(r,g,b,a)` / `rgb(r,g,b)` string into [r,g,b,a(0..1)]. */
+function parseRgba(s: string): [number, number, number, number] {
+  const m = s.match(/rgba?\(([^)]+)\)/);
+  if (!m) return [255, 255, 255, 1];
+  const parts = m[1].split(',').map((p) => parseFloat(p.trim()));
+  return [parts[0] ?? 255, parts[1] ?? 255, parts[2] ?? 255, parts[3] ?? 1];
+}
+
 interface TrailData {
   line: THREE.Line;
   material: THREE.LineBasicMaterial;
@@ -33,9 +75,20 @@ interface BloodData {
 export class WeaponRenderer {
   private scene: THREE.Scene;
   private camera: THREE.Camera;
+
+  // Muzzle flash: a billboarded textured plane (additive) + a pulsing point light.
   private muzzleFlash: THREE.PointLight;
-  private muzzleFlashSprite: THREE.Sprite;
-  private flashTextureReady = false;
+  private muzzleFlashMesh: THREE.Mesh;
+  private muzzleFlashMaterial: THREE.MeshBasicMaterial;
+  private flashTextures = new Map<string, THREE.Texture>();
+
+  // Animation state, driven by tick() rather than setTimeout so it fades smoothly.
+  private flashStart = 0;
+  private flashActive = false;
+  private flashBaseSize = 0.45;
+  private flashPeakIntensity = 5;
+  private static readonly FLASH_MESH_MS = 80;
+  private static readonly FLASH_LIGHT_MS = 50;
 
   /** Camera-parented viewmodel group. All materials have fog:false. */
   public readonly weaponGroup: THREE.Group;
@@ -60,24 +113,27 @@ export class WeaponRenderer {
     this.weaponGroup = this.createWeaponGroup();
     this.camera.add(this.weaponGroup);
 
-    // Muzzle flash light
-    this.muzzleFlash = new THREE.PointLight(0xffaa00, 3, 10);
+    // Muzzle flash light — tint/intensity are set per shot in triggerMuzzleFlash.
+    this.muzzleFlash = new THREE.PointLight(0xffaa00, 0, 10);
     this.muzzleFlash.visible = false;
     this.scene.add(this.muzzleFlash);
 
-    // Muzzle flash sprite — texture is lazy so the constructor has no DOM dependency
-    const spriteMat = new THREE.SpriteMaterial({
-      map: null,
-      color: 0xffaa00,
+    // Muzzle flash billboard — a small textured plane with a procedurally
+    // generated radial-gradient texture, additively blended so it brightens
+    // whatever is behind it. The map is swapped per weapon on each shot.
+    this.muzzleFlashMaterial = new THREE.MeshBasicMaterial({
+      map: this.getFlashTexture('default'),
+      color: 0xffffff,
+      transparent: true,
+      opacity: 1,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    this.muzzleFlashSprite = new THREE.Sprite(spriteMat);
-    this.muzzleFlashSprite.scale.set(0.5, 0.5, 1);
-    this.muzzleFlashSprite.visible = false;
-    // Sprite.raycast requires raycaster.camera to be set; exclude from weapon raycasts
-    (this.muzzleFlashSprite as any).raycast = () => {};
-    this.scene.add(this.muzzleFlashSprite);
+    this.muzzleFlashMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.muzzleFlashMaterial);
+    this.muzzleFlashMesh.visible = false;
+    // Exclude from weapon raycasts.
+    (this.muzzleFlashMesh as any).raycast = () => {};
+    this.scene.add(this.muzzleFlashMesh);
 
     // Trail pool
     this.trailPool = new ObjectPool<TrailData>(
@@ -124,19 +180,87 @@ export class WeaponRenderer {
     return group;
   }
 
-  private createFlashTexture(): THREE.Texture {
-    const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
-    const ctx = canvas.getContext('2d')!;
-    const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    gradient.addColorStop(0, 'rgba(255,255,200,1)');
-    gradient.addColorStop(0.2, 'rgba(255,200,50,0.8)');
-    gradient.addColorStop(0.5, 'rgba(255,100,0,0.3)');
-    gradient.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 64, 64);
-    return new THREE.CanvasTexture(canvas);
+  /** Resolve a weapon-type string to a known flash-profile key. */
+  private resolveFlashKey(weaponType?: string): string {
+    if (!weaponType) return 'default';
+    const key = weaponType.toLowerCase();
+    return key in FLASH_PROFILES ? key : 'default';
+  }
+
+  /** Lazily build + cache the radial-gradient texture for a flash profile. */
+  private getFlashTexture(key: string): THREE.Texture {
+    const cached = this.flashTextures.get(key);
+    if (cached) return cached;
+    const tex = this.createFlashTexture(FLASH_PROFILES[key] ?? FLASH_PROFILES.default);
+    this.flashTextures.set(key, tex);
+    return tex;
+  }
+
+  /**
+   * Build the radial-gradient flash texture: white-hot center → colored mid →
+   * colored edge → transparent. Uses a canvas when the DOM is available
+   * (the real game), and a procedurally-filled DataTexture otherwise (tests /
+   * headless), so the texture is always genuinely procedural with no assets.
+   */
+  private createFlashTexture(profile: FlashProfile): THREE.Texture {
+    const size = 64;
+    if (typeof document !== 'undefined') {
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        g.addColorStop(0, profile.core);
+        g.addColorStop(0.25, profile.mid);
+        g.addColorStop(0.6, profile.edge);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+        return new THREE.CanvasTexture(canvas);
+      }
+    }
+    return this.createDataFlashTexture(profile, size);
+  }
+
+  /** DOM-less radial-gradient: interpolate the gradient stops per pixel. */
+  private createDataFlashTexture(profile: FlashProfile, size: number): THREE.Texture {
+    const stops: Array<{ t: number; c: [number, number, number, number] }> = [
+      { t: 0.0, c: parseRgba(profile.core) },
+      { t: 0.25, c: parseRgba(profile.mid) },
+      { t: 0.6, c: parseRgba(profile.edge) },
+      { t: 1.0, c: [0, 0, 0, 0] },
+    ];
+    const data = new Uint8Array(size * size * 4);
+    const c = (size - 1) / 2;
+    const maxR = size / 2;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = x - c;
+        const dy = y - c;
+        let r = Math.sqrt(dx * dx + dy * dy) / maxR;
+        if (r > 1) r = 1;
+        let a = stops[0];
+        let b = stops[stops.length - 1];
+        for (let i = 0; i < stops.length - 1; i++) {
+          if (r >= stops[i].t && r <= stops[i + 1].t) {
+            a = stops[i];
+            b = stops[i + 1];
+            break;
+          }
+        }
+        const span = b.t - a.t || 1;
+        const f = (r - a.t) / span;
+        const idx = (y * size + x) * 4;
+        data[idx] = Math.round(a.c[0] + (b.c[0] - a.c[0]) * f);
+        data[idx + 1] = Math.round(a.c[1] + (b.c[1] - a.c[1]) * f);
+        data[idx + 2] = Math.round(a.c[2] + (b.c[2] - a.c[2]) * f);
+        data[idx + 3] = Math.round((a.c[3] + (b.c[3] - a.c[3]) * f) * 255);
+      }
+    }
+    const tex = new THREE.DataTexture(data, size, size);
+    tex.needsUpdate = true;
+    return tex;
   }
 
   private createTrailData(): TrailData {
@@ -254,27 +378,77 @@ export class WeaponRenderer {
     this.activeBlood.push(b);
   }
 
-  /** Show muzzle flash at camera position. */
-  showMuzzleFlash(): void {
-    if (!this.flashTextureReady) {
-      this.muzzleFlashSprite.material.map = this.createFlashTexture();
-      this.flashTextureReady = true;
-    }
+  /**
+   * Trigger an animated muzzle flash for the given weapon. The billboard scales
+   * up then fades over ~80ms while the point light pulses bright for ~50ms,
+   * lighting nearby geometry. Color varies per weapon (see FLASH_PROFILES).
+   */
+  triggerMuzzleFlash(weaponType?: string): void {
+    const key = this.resolveFlashKey(weaponType);
+    const profile = FLASH_PROFILES[key];
 
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
     const pos = this.camera.position.clone().add(dir.multiplyScalar(0.5));
     pos.y -= 0.1;
 
-    this.muzzleFlash.position.copy(pos);
-    this.muzzleFlash.visible = true;
-    this.muzzleFlashSprite.position.copy(pos);
-    this.muzzleFlashSprite.visible = true;
+    // Billboard mesh: face the camera, start at ~0 scale.
+    this.muzzleFlashMaterial.map = this.getFlashTexture(key);
+    this.muzzleFlashMaterial.needsUpdate = true;
+    this.muzzleFlashMaterial.opacity = 1;
+    this.muzzleFlashMesh.position.copy(pos);
+    this.muzzleFlashMesh.quaternion.copy(this.camera.quaternion);
+    this.muzzleFlashMesh.scale.set(0.0001, 0.0001, 1);
+    this.muzzleFlashMesh.visible = true;
 
-    setTimeout(() => {
+    // Point light pulse.
+    this.muzzleFlash.position.copy(pos);
+    this.muzzleFlash.color.setHex(profile.light);
+    this.muzzleFlash.intensity = profile.intensity;
+    this.muzzleFlash.visible = true;
+
+    this.flashBaseSize = profile.size;
+    this.flashPeakIntensity = profile.intensity;
+    this.flashStart = performance.now();
+    this.flashActive = true;
+  }
+
+  /** Back-compat alias; prefer triggerMuzzleFlash(weaponType). */
+  showMuzzleFlash(weaponType?: string): void {
+    this.triggerMuzzleFlash(weaponType);
+  }
+
+  /** Advance the muzzle-flash bloom + light pulse. Called from tick(). */
+  private tickMuzzleFlash(now: number): void {
+    if (!this.flashActive) return;
+    const age = now - this.flashStart;
+    const meshDur = WeaponRenderer.FLASH_MESH_MS;
+    const lightDur = WeaponRenderer.FLASH_LIGHT_MS;
+
+    // Mesh: scale 0 → 1.2 → 0 (peak ~35% through) with brightness fade.
+    if (age < meshDur) {
+      const p = age / meshDur;
+      const peak = 0.35;
+      const s = p < peak ? p / peak : 1 - (p - peak) / (1 - peak);
+      const scale = this.flashBaseSize * 1.2 * Math.max(0.0001, s);
+      this.muzzleFlashMesh.scale.set(scale, scale, 1);
+      this.muzzleFlashMesh.quaternion.copy(this.camera.quaternion); // keep billboarded
+      this.muzzleFlashMaterial.opacity = 1 - p;
+    } else {
+      this.muzzleFlashMesh.visible = false;
+    }
+
+    // Light: pulse bright, then fall to zero.
+    if (age < lightDur) {
+      this.muzzleFlash.intensity = this.flashPeakIntensity * (1 - age / lightDur);
+    } else {
+      this.muzzleFlash.intensity = 0;
       this.muzzleFlash.visible = false;
-      this.muzzleFlashSprite.visible = false;
-    }, 50);
+    }
+
+    if (age >= meshDur && age >= lightDur) {
+      this.flashActive = false;
+    }
   }
 
   /** Create a bullet trail from origin to target. */
@@ -311,6 +485,9 @@ export class WeaponRenderer {
 
   /** Tick animations. Call every frame. */
   tick(now: number): void {
+    // Muzzle flash bloom + light pulse
+    this.tickMuzzleFlash(now);
+
     // Fade trails
     for (let i = this.activeTrails.length - 1; i >= 0; i--) {
       const t = this.activeTrails[i];
@@ -373,8 +550,11 @@ export class WeaponRenderer {
     this.camera.remove(this.weaponGroup);
 
     this.scene.remove(this.muzzleFlash);
-    this.scene.remove(this.muzzleFlashSprite);
-    this.muzzleFlashSprite.material.dispose();
+    this.scene.remove(this.muzzleFlashMesh);
+    this.muzzleFlashMesh.geometry.dispose();
+    this.muzzleFlashMaterial.dispose();
+    for (const tex of this.flashTextures.values()) tex.dispose();
+    this.flashTextures.clear();
 
     for (const t of this.activeTrails) {
       this.scene.remove(t.line);

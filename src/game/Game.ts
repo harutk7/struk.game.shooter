@@ -472,7 +472,7 @@ export class Game {
       } else {
         const fr = this.weapons.tryFire(this.player, now / 1000);
         if (fr) {
-          this.weaponRenderer.showMuzzleFlash();
+          this.weaponRenderer.triggerMuzzleFlash(fr.weapon.type);
           // Per-weapon recoil feel from config
           const feel = GAME_CONFIG.weaponFeel[fr.weapon.type];
           this.playerBody.addRecoil(feel.kick, feel.sway);

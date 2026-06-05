@@ -54,6 +54,7 @@ declare module 'three' {
     constructor(x?: number, y?: number, z?: number, w?: number);
     x: number; y: number; z: number; w: number;
     setFromEuler(e: Euler): this;
+    copy(q: Quaternion): this;
   }
 
   export class Color {
@@ -204,13 +205,15 @@ declare module 'three' {
     roughnessMap: Texture | null;
     aoMap: Texture | null;
     aoMapIntensity: number;
-    envMap: Texture | null;
     vertexColors: boolean;
     constructor(params?: Record<string, any>);
   }
 
   export class MeshBasicMaterial extends Material {
     color: Color;
+    map: Texture | null;
+    blending: number;
+    needsUpdate: boolean;
     constructor(params?: Record<string, any>);
   }
 
@@ -297,6 +300,9 @@ declare module 'three' {
     castShadow: boolean;
     shadow: { mapSize: { width: number; height: number } };
     visible: boolean;
+    intensity: number;
+    distance: number;
+    color: Color;
     constructor(color?: number, intensity?: number, distance?: number);
   }
 
