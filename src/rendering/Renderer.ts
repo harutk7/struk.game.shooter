@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { GAME_CONFIG } from '../core/GameConfig';
+import { applyEnvironment } from './EnvironmentMap';
 
 export class Renderer {
   public readonly threeRenderer: THREE.WebGLRenderer;
@@ -41,6 +42,11 @@ export class Renderer {
     this.threeRenderer.toneMappingExposure = 1.0;
 
     container.appendChild(this.threeRenderer.domElement);
+
+    // Install the HDRI environment map (T8) so metallic surfaces — weapon
+    // slides/barrels — reflect the sky. Best-effort: failure leaves the scene
+    // unchanged. Fire-and-forget; the first frames simply render without it.
+    void applyEnvironment(this.scene, this.threeRenderer);
 
     window.addEventListener('resize', this.onResize);
   }

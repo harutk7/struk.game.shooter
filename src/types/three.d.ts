@@ -121,6 +121,7 @@ declare module 'three' {
   export class Scene extends Object3D {
     fog: Fog | FogExp2 | null;
     environment: Texture | null;
+    background: Texture | Color | null;
   }
 
   export class Fog {
@@ -196,6 +197,8 @@ declare module 'three' {
     emissive: Color;
     emissiveIntensity: number;
     map: Texture | null;
+    envMap: Texture | null;
+    envMapIntensity: number;
     needsUpdate: boolean;
     normalMap: Texture | null;
     roughnessMap: Texture | null;
@@ -305,6 +308,9 @@ declare module 'three' {
     needsUpdate: boolean;
     magFilter: number;
     minFilter: number;
+    mapping: number;
+    colorSpace: string;
+    image: any;
     dispose(): void;
   }
 
@@ -319,6 +325,16 @@ declare module 'three' {
       onProgress?: (event: ProgressEvent) => void,
       onError?: (err: unknown) => void,
     ): Texture;
+  }
+
+  export class DataTexture extends Texture {
+    constructor(
+      data?: ArrayBufferView,
+      width?: number,
+      height?: number,
+      format?: number,
+      type?: number,
+    );
   }
 
   export const MathUtils: {
@@ -337,6 +353,21 @@ declare module 'three' {
   export const RepeatWrapping: number;
   export const NearestFilter: number;
   export const LinearFilter: number;
+  export const RGBAFormat: number;
+  export const EquirectangularReflectionMapping: number;
+}
+
+declare module 'three/examples/jsm/loaders/RGBELoader' {
+  import { Texture } from 'three';
+
+  export class RGBELoader {
+    load(
+      url: string,
+      onLoad?: (texture: Texture) => void,
+      onProgress?: (event: ProgressEvent) => void,
+      onError?: (err: unknown) => void,
+    ): void;
+  }
 }
 
 declare module 'three/examples/jsm/loaders/RGBELoader.js' {

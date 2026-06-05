@@ -7,9 +7,11 @@ export interface AssetEntry {
 export interface AssetManifest {
   /** GLTF weapon models (T7) */
   weapons: AssetEntry[];
-  /** PBR texture maps — TODO T2: add concrete/metal textures; TODO T3: add additional PBR sets */
+  /** PBR texture maps — T8 registers the metal map; TODO T3: add additional PBR sets */
   textures: AssetEntry[];
-  /** Audio clips — TODO T8: add sound-effect entries here */
+  /** Environment maps — HDRI used as scene.environment for reflections (T4/T8) */
+  environments?: AssetEntry[];
+  /** Audio clips — TODO: add sound-effect entries here */
   audio: AssetEntry[];
 }
 
@@ -27,6 +29,12 @@ export const assetManifest: AssetManifest = {
       url: '/assets/concrete_floor_02_diff_1k.jpg',
       license: 'CC0',
     },
+    // T8: PBR diffuse map used for the metal weapon parts (Poly Haven, CC0).
+    { name: 'metal_plate', url: '/assets/metal_plate_diff_1k.jpg', license: 'CC0 1.0 (Poly Haven)' },
+  ],
+  // T8: HDRI environment map installed as scene.environment (see EnvironmentMap.ts).
+  environments: [
+    { name: 'kiara_9_dusk', url: '/assets/kiara_9_dusk_1k.hdr', license: 'CC0 1.0 (Poly Haven)' },
   ],
   audio: [],
 };

@@ -13,6 +13,8 @@
 import * as THREE from 'three';
 import type { WeaponType } from '../models/Weapon';
 import { AssetLoader } from '../assets/AssetLoader';
+import { specForPart } from '../assets/weaponMaterials';
+import type { PBRMaterialSpec } from '../assets/weaponMaterials';
 
 // ── glTF weapon models (T7) ───────────────────────────────────────────────────
 //
@@ -129,6 +131,9 @@ function enhanceWithGLTF(group: THREE.Group, type: WeaponType): Promise<void> {
       disposeWeaponModel(child);
     }
     group.add(model);
+    // Re-skin any glTF parts we can identify by name with PBR materials (T8).
+    // Unrecognised meshes keep their glTF-authored material.
+    applyWeaponMaterials(model, type);
   }).catch(() => {
     // Network/parse error — procedural model already in place.
   });
@@ -141,6 +146,103 @@ const MAT = {
   rubber: () => new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 1.0 }),
   darkWood: () => new THREE.MeshStandardMaterial({ color: 0x3a2a14, roughness: 0.9 }),
 };
+
+// ── PBR per-part materials (T8) ───────────────────────────────────────────────
+//
+// After a weapon is built (procedural or glTF), applyWeaponMaterials() walks its
+// meshes and re-skins each recognised part (barrel, grip, handguard, …) with a
+// MeshStandardMaterial tuned for metal / polymer / wood / rubber — see
+// src/assets/weaponMaterials.ts for the name→category mapping. Metal parts get
+// high metalness so they reflect scene.environment (the HDRI from EnvironmentMap);
+// wood parts get a procedural wood-grain map so the furniture shows grain.
+
+// Shared procedural wood-grain texture (lazily built once, reused everywhere).
+let woodTexture: THREE.Texture | null = null;
+
+/** Deterministic value noise in [0,1) — no Math.random so the grain is stable. */
+function grainNoise(x: number, y: number): number {
+  const s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+/**
+ * Build a small tiling wood-grain texture as a DataTexture (pure pixel data, so
+ * it works headlessly in tests — no canvas/DOM required). Vertical streaks plus
+ * warped rings read as grain when wrapped over the stock/handguard.
+ */
+function makeWoodTexture(): THREE.Texture {
+  const W = 64;
+  const H = 64;
+  const data = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const ring = Math.sin(x * 0.30 + Math.sin(y * 0.06) * 2.4) * 0.5 + 0.5;
+      const streak = Math.sin(y * 1.6 + x * 0.05) * 0.06;
+      const noise = grainNoise(x, y) * 0.10;
+      const t = Math.min(1, Math.max(0, ring * 0.7 + 0.13 + streak + noise));
+      // Lerp dark→light wood brown.
+      const r = Math.round(0x4a + (0x8c - 0x4a) * t);
+      const g = Math.round(0x2c + (0x5a - 0x2c) * t);
+      const b = Math.round(0x14 + (0x2e - 0x14) * t);
+      const i = (y * W + x) * 4;
+      data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, 2);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function getWoodTexture(): THREE.Texture {
+  if (!woodTexture) woodTexture = makeWoodTexture();
+  return woodTexture;
+}
+
+/** Build a MeshStandardMaterial from a PBR spec (plus the wood map if asked). */
+function makeMaterialFromSpec(spec: PBRMaterialSpec): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({
+    color: spec.color,
+    metalness: spec.metalness,
+    roughness: spec.roughness,
+  });
+  mat.envMapIntensity = spec.envMapIntensity;
+  if (spec.map === 'wood') {
+    mat.map = getWoodTexture();
+    mat.color.setHex(0xffffff); // let the grain texture supply the colour
+  }
+  mat.needsUpdate = true;
+  return mat;
+}
+
+/**
+ * Assign per-part PBR materials to a built weapon model.
+ *
+ * Walks every mesh in `model`, looks its name up in weaponMaterials, and for
+ * RECOGNISED parts replaces the material with a metal / polymer / wood / rubber
+ * MeshStandardMaterial. Meshes whose names aren't recognised are left untouched,
+ * so any material authored inside a glTF survives (DO #3). Safe to call on both
+ * the procedural box model and a loaded glTF scene.
+ */
+export function applyWeaponMaterials(model: THREE.Object3D, type: WeaponType): void {
+  model.traverse((o: THREE.Object3D) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const spec = specForPart(type, o.name);
+    if (!spec) return; // unknown part — keep its existing material
+    const replacement = makeMaterialFromSpec(spec);
+    // Dispose the material we're swapping out to avoid leaking GPU resources.
+    const old = m.material;
+    if (Array.isArray(old)) old.forEach((mm) => mm.dispose());
+    else if (old) old.dispose();
+    m.material = replacement;
+  });
+}
 
 /**
  * Apply a procedural camo to all named 'body' / 'handguard' / 'stock'
@@ -169,7 +271,9 @@ export function applyCamo(model: THREE.Object3D, camo: 'none' | 'woodland' | 'de
     const m = o as THREE.Mesh;
     if (targets.includes(o.name) && (m as any).material) {
       const mat = m.material as THREE.MeshStandardMaterial;
-      if (mat && mat.map === null) {
+      // Camo is an explicit override: it wins over the PBR wood/polymer map
+      // that applyWeaponMaterials may already have assigned to these parts.
+      if (mat) {
         mat.map = tex;
         mat.color.setHex(0xffffff);
         mat.needsUpdate = true;
@@ -413,6 +517,7 @@ function buildProceduralModel(type: WeaponType): THREE.Group {
  */
 export function buildWeaponModel(type: WeaponType, camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none'): THREE.Group {
   const g = buildProceduralModel(type);
+  applyWeaponMaterials(g, type);
   if (camo !== 'none') applyCamo(g, camo);
   void enhanceWithGLTF(g, type);
   return g;
@@ -430,6 +535,7 @@ export async function loadWeaponModel(
   camo: 'none' | 'woodland' | 'desert' | 'urban' = 'none',
 ): Promise<THREE.Group> {
   const g = buildProceduralModel(type);
+  applyWeaponMaterials(g, type);
   if (camo !== 'none') applyCamo(g, camo);
   await enhanceWithGLTF(g, type);
   return g;
